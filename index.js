@@ -18,17 +18,17 @@ const app = express();
 const allowedOrigins = ["http://localhost:5173", "https://frontafripoksv2.vercel.app"];
 
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: allowedOrigins,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
 app.use(express.json()); 
+
+// Route de test pour vérifier si le serveur répond
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Serveur Poker est en ligne' });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/tables', tableRoutes);
@@ -48,8 +48,10 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
 });
 
 function broadcastTableState(table) {
@@ -272,6 +274,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => {
-  console.log(`Serveur Poker lancé sur http://localhost:${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Serveur Poker lancé sur le port ${PORT}`);
 });
