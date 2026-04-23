@@ -15,6 +15,8 @@ export class Table {
     this.communityCards = [];
     this.pots = []; // { amount: 0, eligiblePlayerIds: [] }
     this.dealerIndex = 0;
+    this.sbIndex = -1;
+    this.bbIndex = -1;
     this.currentPlayerIndex = -1;
     this.currentPhase = 'pre-flop';
     this.onUpdate = null;
@@ -136,9 +138,11 @@ export class Table {
     // Find next active players for blinds
     let sbIdx = (this.dealerIndex + 1) % this.players.length;
     while (this.players[sbIdx].status !== 'active') sbIdx = (sbIdx + 1) % this.players.length;
+    this.sbIndex = sbIdx;
     
     let bbIdx = (sbIdx + 1) % this.players.length;
     while (this.players[bbIdx].status !== 'active') bbIdx = (bbIdx + 1) % this.players.length;
+    this.bbIndex = bbIdx;
 
     this.postBlind(this.players[sbIdx], this.smallBlind);
     this.postBlind(this.players[bbIdx], this.bigBlind);
@@ -453,7 +457,7 @@ export class Table {
       currentBet: this.currentBet,
       previousBet: this.previousBet,
       winnerInfo: this.winnerInfo,
-      players: this.players.map(p => ({
+      players: this.players.map((p, index) => ({
         id: p.id,
         name: p.name,
         chips: p.chips,
@@ -461,6 +465,9 @@ export class Table {
         position: p.position,
         status: p.status,
         lastAction: p.lastAction,
+        role: index === this.dealerIndex ? 'dealer' : 
+              index === this.sbIndex ? 'small' : 
+              index === this.bbIndex ? 'big' : null,
         cards: (p.id === playerId || this.gameState === 'showdown') ? p.cards : [],
         handResult: (this.gameState === 'showdown' && p.status !== 'folded') ? 
           HandEvaluator.getHandDescription(HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null

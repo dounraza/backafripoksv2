@@ -24,6 +24,12 @@ app.use(cors({
 }));
 app.use(express.json()); 
 
+// Logger pour débugger les requêtes sur Railway
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url} - Origin: ${req.get('origin')}`);
+  next();
+});
+
 // Route de test pour vérifier si le serveur répond
 app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'Serveur Poker est en ligne' });
@@ -47,10 +53,11 @@ connectDB().then(async () => {
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
+    origin: true,
     methods: ["GET", "POST"],
     credentials: true
   },
+  allowEIO3: true,
   transports: ['websocket', 'polling']
 });
 
