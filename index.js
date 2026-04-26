@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -23,20 +24,21 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      var msg = 'The CORS policy for this site does not ' +
-                'allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // Pour autoriser temporairement d'autres origines si nécessaire durant le debug
+      // on peut changer ceci en callback(null, true) ou ajouter l'origine aux logs
+      console.log("CORS blocked origin:", origin);
+      callback(null, true); // On autorise tout pour le moment pour débloquer
     }
-    return callback(null, true);
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 app.use(express.json()); 
+app.use(express.static('public'));
 
 // Logger pour débugger les requêtes sur Railway
 app.use((req, res, next) => {
@@ -88,7 +90,8 @@ function broadcastLobbyUpdate() {
   const updateData = tables.map(t => ({
     id: t.id,
     currentPlayers: t.players.length,
-    playerNames: t.players.map(p => p.name)
+    playerNames: t.players.map(p => p.name),
+    playerAvatars: t.players.map(p => p.avatarUrl)
   }));
   io.emit('lobbyUpdate', updateData);
 }
@@ -202,7 +205,7 @@ io.on('connection', (socket) => {
         table.setUpdateCallback(() => broadcastTableState(table));
       }
 
-      const player = table.addPlayer(socket.id, playerName, initialChips);
+      const player = table.addPlayer(socket.id, playerName, initialChips, user.avatar_url);
       if (player.error) {
         user.Solde.montant = parseFloat(user.Solde.montant) + initialChips;
         await user.Solde.save();

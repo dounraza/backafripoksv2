@@ -1,8 +1,9 @@
 export class Player {
-  constructor(id, name, chips = 1000) {
+  constructor(id, name, chips = 1000, avatarUrl = null) {
     this.id = id;
     this.name = name;
     this.chips = chips;
+    this.avatarUrl = avatarUrl;
     this.cards = [];
     this.status = 'waiting'; 
     this.bet = 0;

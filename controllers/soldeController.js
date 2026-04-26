@@ -1,6 +1,7 @@
 import Solde from '../models/Solde.js';
 
 export const getSolde = async (req, res) => {
+  console.log(`DEBUG: Accessing /api/solde for User ID: ${req.user ? req.user.id : 'unknown'}`);
   try {
     const userId = req.user.id; // Sécurisé par le middleware
     const solde = await Solde.findOne({ where: { userId } });

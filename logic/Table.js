@@ -52,9 +52,9 @@ export class Table {
     }, 15000); // 15 secondes
   }
 
-  addPlayer(id, name, chips) {
+  addPlayer(id, name, chips, avatarUrl = null) {
     if (this.players.length >= this.maxPlayers) return { error: 'Table pleine' };
-    const player = new Player(id, name, chips);
+    const player = new Player(id, name, chips, avatarUrl);
     
     const occupiedPositions = this.players.map(p => p.position);
     for (let i = 0; i < this.maxPlayers; i++) {
@@ -461,6 +461,7 @@ export class Table {
         id: p.id,
         name: p.name,
         chips: p.chips,
+        avatarUrl: p.avatarUrl,
         bet: p.bet,
         position: p.position,
         status: p.status,

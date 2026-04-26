@@ -25,6 +25,22 @@ const User = sequelize.define('User', {
     type: DataTypes.DECIMAL(15, 2),
     defaultValue: 1000.00,
   },
+  avatar_url: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  mobile_money_provider: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  mobile_money_number: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  mobile_money_account_name: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
 }, {
   tableName: 'users',
   timestamps: false,
