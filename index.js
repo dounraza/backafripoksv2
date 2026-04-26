@@ -15,12 +15,26 @@ import User from './models/User.js';
 import Solde from './models/Solde.js';
 
 const app = express();
-const allowedOrigins = ["http://localhost:5173", "https://frontafripoksv2.vercel.app"];
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://frontafripoksv2.vercel.app",
+  "https://frontafripoksv2.vercel.app/"
+];
 
 app.use(cors({
-  origin: true,
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      var msg = 'The CORS policy for this site does not ' +
+                'allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
 app.use(express.json()); 
 
@@ -53,7 +67,7 @@ connectDB().then(async () => {
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: true,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   },
