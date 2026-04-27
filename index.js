@@ -168,8 +168,9 @@ io.on('connection', (socket) => {
             console.log(`Recharge de ${playerName}: +${addAmount} MGA. Nouveaux jetons: ${existingPlayer.chips}`);
         }
         
-        console.log(`Reconnexion/Recharge de ${playerName} (Socket ID mis à jour)`);
-        existingPlayer.id = socket.id;
+        console.log(`Reconnexion/Recharge de ${playerName} (Socket ID mis à jour: ${socket.id})`);
+        // UPDATE CRITIQUE: Mettre à jour l'ID dans la logique de la table aussi
+        existingPlayer.id = socket.id; 
         socket.join(tableId);
 
         // Si la table était en attente, on vérifie si on peut lancer une main
