@@ -188,18 +188,20 @@ io.on('connection', (socket) => {
       }
 
       const initialChips = parseInt(buyIn) || 0;
-      if (initialChips < table.minBuyIn) {
+      if (initialChips > 0 && initialChips < table.minBuyIn) {
         return socket.emit('error', { message: `Le montant minimum pour cette table est de ${table.minBuyIn} MGA` });
       }
 
-      if (parseFloat(user.Solde.montant) < initialChips) {
+      if (initialChips > 0 && parseFloat(user.Solde.montant) < initialChips) {
         return socket.emit('error', { message: `Solde insuffisant. Vous avez ${user.Solde.montant} MGA` });
       }
 
-      // Déduire le montant du solde
-      user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
-      await user.Solde.save();
-      console.log(`Solde mis à jour pour ${playerName}: -${initialChips} MGA (Nouveau: ${user.Solde.montant})`);
+      if (initialChips > 0) {
+        // Déduire le montant du solde
+        user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
+        await user.Solde.save();
+        console.log(`Solde mis à jour pour ${playerName}: -${initialChips} MGA (Nouveau: ${user.Solde.montant})`);
+      }
 
       if (!table.onUpdate) {
         table.setUpdateCallback(() => broadcastTableState(table));
@@ -286,14 +288,22 @@ io.on('connection', (socket) => {
     onlinePlayers--;
     io.emit('onlineCount', onlinePlayers);
     console.log('Joueur déconnecté :', socket.id, 'Total:', onlinePlayers);
-    const tables = tableManager.getAllTables();
-    for (const table of tables) {
-      const result = table.removePlayer(socket.id);
-      if (result) {
-        await returnChipsToUser(result.name, result.chips);
-        broadcastTableState(table);
+    
+    // Miandry 5 segondra vao manaisotra ny mpilalao (Grace period for refresh)
+    setTimeout(async () => {
+      const tables = tableManager.getAllTables();
+      for (const table of tables) {
+        // Jereo raha mbola ilay socket ID taloha no ao (izany hoe mbola tsy nanao rejoin izy)
+        const player = table.players.find(p => p.id === socket.id);
+        if (player) {
+          const result = table.removePlayer(socket.id);
+          if (result) {
+            await returnChipsToUser(result.name, result.chips);
+            broadcastTableState(table);
+          }
+        }
       }
-    }
+    }, 5000); // 5 segondra malalaka tsara hanaovana refresh
   });
 });
 

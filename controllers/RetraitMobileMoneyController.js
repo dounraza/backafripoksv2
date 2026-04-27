@@ -4,7 +4,12 @@ import Solde from '../models/Solde.js';
 
 export const createRetrait = async (req, res) => {
   try {
-    const { pseudo, montant, numero, nom } = req.body;
+    const { montant, numero, nom } = req.body;
+    const pseudo = req.user.name || req.body.pseudo;
+
+    if (!pseudo) {
+      return res.status(400).json({ error: "Pseudo manquant" });
+    }
 
     const user = await User.findOne({ where: { name: pseudo } });
     if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });

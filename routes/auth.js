@@ -32,7 +32,7 @@ router.post('/login', async (req, res) => {
     const user = await User.findOne({ where: { email } });
     
     if (user && (await user.validPassword(password))) {
-      const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+      const token = jwt.sign({ id: user.id, name: user.name }, process.env.JWT_SECRET, { expiresIn: '1d' });
       res.json({
         id: user.id,
         name: user.name,

@@ -5,7 +5,12 @@ import { Op } from 'sequelize';
 
 export const createDepot = async (req, res) => {
   try {
-    const { pseudo, montant, numero, nom, reference } = req.body;
+    const { montant, numero, nom, reference } = req.body;
+    const pseudo = req.user.name || req.body.pseudo;
+
+    if (!pseudo) {
+      return res.status(400).json({ error: 'Pseudo manquant' });
+    }
 
     if (!montant || isNaN(montant) || parseFloat(montant) <= 0) {
       return res.status(400).json({ error: 'Montant incorrect' });
