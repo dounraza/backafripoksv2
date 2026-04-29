@@ -343,6 +343,14 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('emoji', ({ tableId, emoji }) => {
+    io.to(tableId).emit('newEmoji', {
+      playerName: socket.user.name,
+      emoji,
+      timestamp: Date.now()
+    });
+  });
+
   socket.on('disconnect', async () => {
     onlinePlayers--;
     io.emit('onlineCount', onlinePlayers);
