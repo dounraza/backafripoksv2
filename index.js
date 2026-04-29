@@ -78,18 +78,27 @@ const io = new Server(httpServer, {
 
 // Middleware d'authentification Socket.io
 io.use((socket, next) => {
-  const token = socket.handshake.auth.token || socket.handshake.headers['authorization'];
+  const token = socket.handshake.auth?.token || socket.handshake.headers['authorization'];
+  
   if (!token) {
+    console.log('Socket connection rejected: Token missing');
     return next(new Error('Authentication error: Token missing'));
   }
   
   const cleanToken = token.startsWith('Bearer ') ? token.slice(7) : token;
   
+  if (!process.env.JWT_SECRET) {
+    console.error('CRITICAL: JWT_SECRET is not defined in environment variables');
+    return next(new Error('Internal server error'));
+  }
+
   jwt.verify(cleanToken, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
+      console.log(`Socket connection rejected: Invalid token (${err.message})`);
       return next(new Error('Authentication error: Invalid token'));
     }
     socket.user = decoded; // Stocker les infos user dans le socket
+    console.log(`Socket authenticated for user: ${decoded.name}`);
     next();
   });
 });
