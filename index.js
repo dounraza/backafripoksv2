@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
 import { tableManager } from './logic/TableManager.js';
 import sequelize from './config/database.js';
 import { connectDB } from './config/database.js';
@@ -27,10 +28,8 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      // Pour autoriser temporairement d'autres origines si nécessaire durant le debug
-      // on peut changer ceci en callback(null, true) ou ajouter l'origine aux logs
       console.log("CORS blocked origin:", origin);
-      callback(null, true); // On autorise tout pour le moment pour débloquer
+      callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -77,6 +76,24 @@ const io = new Server(httpServer, {
   transports: ['websocket', 'polling']
 });
 
+// Middleware d'authentification Socket.io
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token || socket.handshake.headers['authorization'];
+  if (!token) {
+    return next(new Error('Authentication error: Token missing'));
+  }
+  
+  const cleanToken = token.startsWith('Bearer ') ? token.slice(7) : token;
+  
+  jwt.verify(cleanToken, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return next(new Error('Authentication error: Invalid token'));
+    }
+    socket.user = decoded; // Stocker les infos user dans le socket
+    next();
+  });
+});
+
 function broadcastTableState(table) {
   table.players.forEach(p => {
     io.to(p.id).emit('tableUpdated', table.getStateForPlayer(p.id));
@@ -101,6 +118,24 @@ function setupTableCallbacks(table) {
   if (!table.onUpdate) {
     table.setUpdateCallback(() => broadcastTableState(table));
   }
+  // Enregistrement historique
+  if (!table.onHandEnd) {
+    table.setHandEndCallback(async (playersData) => {
+      try {
+        await HistoriqueMain.create({
+          table_name: table.id,
+          cartes_communautema: table.communityCards.map(c => c.value + c.suit),
+          in_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({
+            pseudo: p.name,
+            cards: p.cards.map(c => c.value + c.suit)
+          }))
+        });
+        console.log(`Historique enregistré pour la table ${table.id}`);
+      } catch (err) {
+        console.error('Erreur lors de l\'enregistrement de l\'historique:', err);
+      }
+    });
+  }
 }
 
 let onlinePlayers = 0;
@@ -108,9 +143,10 @@ let onlinePlayers = 0;
 io.on('connection', (socket) => {
   onlinePlayers++;
   io.emit('onlineCount', onlinePlayers);
-  console.log('Un joueur s\'est connecté :', socket.id, 'Total:', onlinePlayers);
+  console.log('Un joueur authentifié s\'est connecté :', socket.user.name, 'Socket ID:', socket.id, 'Total:', onlinePlayers);
 
-  socket.on('joinTable', async ({ tableId, playerName, buyIn }) => {
+  socket.on('joinTable', async ({ tableId, buyIn }) => {
+    const playerName = socket.user.name; // Sécurisé : on utilise le nom du token JWT
     const sTableId = String(tableId);
     let table = tableManager.getTable(sTableId);
 
@@ -141,14 +177,18 @@ io.on('connection', (socket) => {
       return socket.emit('error', { message: 'Table non trouvée' });
     }
 
+    // Utilisation d'une transaction pour garantir l'intégrité du solde
+    const t = await sequelize.transaction();
     try {
-      // FIX: use 'name' instead of 'username' to match User model
       const user = await User.findOne({ 
         where: { name: playerName },
-        include: [{ model: Solde }] 
+        include: [{ model: Solde }],
+        transaction: t,
+        lock: t.LOCK.UPDATE // Empêcher d'autres modifications simultanées
       });
 
       if (!user) {
+        await t.rollback();
         console.log(`Utilisateur non trouvé: ${playerName}`);
         return socket.emit('error', { message: 'Utilisateur non trouvé' });
       }
@@ -159,15 +199,17 @@ io.on('connection', (socket) => {
         const addAmount = parseInt(buyIn) || 0;
         if (addAmount > 0) {
             if (parseFloat(user.Solde.montant) < addAmount) {
+                await t.rollback();
                 return socket.emit('error', { message: `Solde insuffisant pour recharger. Vous avez ${user.Solde.montant} MGA` });
             }
             // Déduire du solde et ajouter aux jetons
             user.Solde.montant = parseFloat(user.Solde.montant) - addAmount;
-            await user.Solde.save();
+            await user.Solde.save({ transaction: t });
             existingPlayer.chips += addAmount;
             console.log(`Recharge de ${playerName}: +${addAmount} MGA. Nouveaux jetons: ${existingPlayer.chips}`);
         }
         
+        await t.commit();
         console.log(`Reconnexion/Recharge de ${playerName} (Socket ID mis à jour: ${socket.id})`);
         // UPDATE CRITIQUE: Mettre à jour l'ID dans la logique de la table aussi
         existingPlayer.id = socket.id; 
@@ -184,38 +226,37 @@ io.on('connection', (socket) => {
       }
 
       if (!user.Solde) {
+        await t.rollback();
         console.log(`Solde non trouvé pour l'utilisateur: ${playerName}`);
         return socket.emit('error', { message: 'Compte solde non trouvé' });
       }
 
       const initialChips = parseInt(buyIn) || 0;
       if (initialChips > 0 && initialChips < table.minBuyIn) {
+        await t.rollback();
         return socket.emit('error', { message: `Le montant minimum pour cette table est de ${table.minBuyIn} MGA` });
       }
 
       if (initialChips > 0 && parseFloat(user.Solde.montant) < initialChips) {
+        await t.rollback();
         return socket.emit('error', { message: `Solde insuffisant. Vous avez ${user.Solde.montant} MGA` });
       }
 
       if (initialChips > 0) {
         // Déduire le montant du solde
         user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
-        await user.Solde.save();
+        await user.Solde.save({ transaction: t });
         console.log(`Solde mis à jour pour ${playerName}: -${initialChips} MGA (Nouveau: ${user.Solde.montant})`);
-      }
-
-      if (!table.onUpdate) {
-        table.setUpdateCallback(() => broadcastTableState(table));
       }
 
       const player = table.addPlayer(socket.id, playerName, initialChips, user.avatar_url);
       if (player.error) {
-        user.Solde.montant = parseFloat(user.Solde.montant) + initialChips;
-        await user.Solde.save();
-        console.log(`Erreur joinTable: ${player.error}. Remboursement.`);
+        await t.rollback();
+        console.log(`Erreur joinTable: ${player.error}`);
         return socket.emit('error', { message: player.error });
       }
 
+      await t.commit();
       socket.join(tableId);
       console.log(`${playerName} a rejoint la table ${tableId}. Joueurs actuels: ${table.players.length}`);
 
@@ -230,6 +271,7 @@ io.on('connection', (socket) => {
         broadcastTableState(table);
       }
     } catch (err) {
+      await t.rollback();
       console.error('Détails de l\'erreur joinTable:', err);
       socket.emit('error', { message: `Erreur serveur: ${err.message}` });
     }
@@ -237,17 +279,24 @@ io.on('connection', (socket) => {
 
   const returnChipsToUser = async (playerName, chips) => {
     if (chips <= 0) return;
+    const t = await sequelize.transaction();
     try {
       const user = await User.findOne({
         where: { name: playerName },
-        include: [{ model: Solde }]
+        include: [{ model: Solde }],
+        transaction: t,
+        lock: t.LOCK.UPDATE
       });
       if (user && user.Solde) {
         user.Solde.montant = parseFloat(user.Solde.montant) + chips;
-        await user.Solde.save();
+        await user.Solde.save({ transaction: t });
+        await t.commit();
         console.log(`Jetons retournés à ${playerName}: +${chips} MGA (Nouveau: ${user.Solde.montant})`);
+      } else {
+        await t.rollback();
       }
     } catch (err) {
+      await t.rollback();
       console.error(`Erreur lors du retour des jetons pour ${playerName}:`, err);
     }
   };
@@ -311,4 +360,21 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Serveur Poker lancé sur le port ${PORT}`);
+});
+
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Le port ${PORT} est déjà utilisé. Veuillez fermer le processus qui l'utilise ou changer de port.`);
+  } else {
+    console.error('Erreur du serveur HTTP:', err);
+  }
+  process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Exception non capturée (Uncaught Exception):', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Promesse non gérée (Unhandled Rejection):', reason);
 });

@@ -2,11 +2,13 @@ import DepotMobileMoney from '../models/DepotMobileMoney.js';
 import User from '../models/User.js';
 import Solde from '../models/Solde.js';
 import { Op } from 'sequelize';
+import sequelize from '../config/database.js';
 
 export const createDepot = async (req, res) => {
   try {
     const { montant, numero, nom, reference } = req.body;
-    const pseudo = req.user.name || req.body.pseudo;
+    // Utiliser req.user.name si authentifié, sinon req.body.pseudo (pour compatibilité)
+    const pseudo = (req.user && req.user.name) ? req.user.name : req.body.pseudo;
 
     if (!pseudo) {
       return res.status(400).json({ error: 'Pseudo manquant' });
@@ -59,30 +61,54 @@ export const processTransaction = async (req, res) => {
   const { id } = req.params;
   const { etat } = req.body;
 
+  const t = await sequelize.transaction();
   try {
-    const depot = await DepotMobileMoney.findByPk(id);
-    if (!depot) return res.status(404).json({ error: "Dépôt introuvable" });
-
-    // Si déjà validé, on ne peut plus changer ? (selon la logique métier, ici on laisse faire comme dans la réf)
-    const user = await User.findOne({ where: { name: depot.pseudo } });
-    if (!user) return res.status(404).json({ error: "Utilisateur introuvable" });
-
-    let solde = await Solde.findOne({ where: { userId: user.id } });
-    if (!solde) {
-        solde = await Solde.create({ userId: user.id, montant: 0 });
+    const depot = await DepotMobileMoney.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!depot) {
+      await t.rollback();
+      return res.status(404).json({ error: "Dépôt introuvable" });
     }
 
-    // Si on valide le dépôt (etat: true)
+    // Si déjà validé, on évite le double crédit
+    if (depot.etat === true && etat === true) {
+      await t.rollback();
+      return res.status(400).json({ error: "Ce dépôt est déjà validé" });
+    }
+
+    const user = await User.findOne({ 
+      where: { name: depot.pseudo },
+      transaction: t
+    });
+    
+    if (!user) {
+      await t.rollback();
+      return res.status(404).json({ error: "Utilisateur introuvable" });
+    }
+
+    let solde = await Solde.findOne({ 
+      where: { userId: user.id },
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
+    
+    if (!solde) {
+        solde = await Solde.create({ userId: user.id, montant: 0 }, { transaction: t });
+    }
+
+    // Si on valide le dépôt (etat: true) et qu'il n'était pas encore validé
     if (etat === true && depot.etat === false) {
       solde.montant = parseFloat(solde.montant) + parseFloat(depot.montant);
-      await solde.save();
+      await solde.save({ transaction: t });
+      console.log(`Dépôt validé pour ${depot.pseudo}: +${depot.montant} MGA`);
     }
 
     depot.etat = etat;
-    await depot.save();
+    await depot.save({ transaction: t });
 
+    await t.commit();
     res.json({ message: "Mise à jour réussie", depot });
   } catch (error) {
+    await t.rollback();
     res.status(500).json({ error: error.message });
   }
 };

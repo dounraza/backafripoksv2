@@ -1,4 +1,5 @@
 import TablePoker from '../models/TablePoker.js';
+import HistoriqueMain from '../models/HistoriqueMain.js';
 import { tableManager } from '../logic/TableManager.js';
 
 export const getTables = async (req, res) => {
@@ -17,6 +18,41 @@ export const getTables = async (req, res) => {
     });
 
     res.json(enrichedTables);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getHistoriqueByTableId = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tableData = await TablePoker.findByPk(id);
+    
+    if (!tableData) {
+      return res.status(404).json({ error: 'Table non trouvée' });
+    }
+
+    const historique = await HistoriqueMain.findAll({
+      where: { table_name: String(tableData.id) }, // Assure-toi que c'est le format stocké
+      order: [['createdAt', 'DESC']],
+      limit: 10
+    });
+    
+    res.json(historique);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const getHistorique = async (req, res) => {
+  try {
+    const { tableName } = req.params;
+    const historique = await HistoriqueMain.findAll({
+      where: { table_name: tableName },
+      order: [['createdAt', 'DESC']],
+      limit: 10
+    });
+    res.json(historique);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -73,11 +73,29 @@ export class Table {
     if (playerIndex === -1) return null;
     
     const player = this.players[playerIndex];
-    const chipsToReturn = player.chips + (player.bet || 0);
     const playerName = player.name;
+    let chipsToReturn = player.chips;
+
+    // ANTI-EXPLOIT: Raha mbola "playing" ny table ary ilay mpilalao dia "active" na "all-in"
+    // dia ny "chips" (jetons en main) ihany no averina. Ny "bet" (jetons efa eo ambony latabatra)
+    // dia mijanona ho an'ny pot raha sendra miala izy.
+    if (this.gameState === 'playing' && (player.status === 'active' || player.status === 'all-in')) {
+      console.log(`Anti-exploit: ${playerName} miala nefa mbola milalao. Ny chips ${player.chips} ihany no averina.`);
+      // Raha ny anjarany no milalao dia fold-entsika izy
+      if (this.currentPlayerIndex === playerIndex) {
+        this.handleAction(id, 'fold');
+      } else {
+        player.status = 'folded'; // Force fold raha tsy ny anjarany
+      }
+    }
 
     this.players.splice(playerIndex, 1);
     
+    // Ajuster currentPlayerIndex si nécessaire suite à la suppression
+    if (this.gameState === 'playing' && this.currentPlayerIndex >= playerIndex) {
+      this.currentPlayerIndex = Math.max(0, this.currentPlayerIndex - 1);
+    }
+
     if (this.players.length < 2) {
       this.gameState = 'waiting';
     }
@@ -131,25 +149,42 @@ export class Table {
     const activePlayers = this.players.filter(p => p.status === 'active');
     if (activePlayers.length < 2) {
         this.gameState = 'waiting';
-        return { error: 'Pas assez de joueurs avec des jetons' };
+        return { error: 'Pas assez de joueurs with tokens' };
     }
 
     this.dealerIndex = (this.dealerIndex + 1) % this.players.length;
-    // Find next active players for blinds
-    let sbIdx = (this.dealerIndex + 1) % this.players.length;
-    while (this.players[sbIdx].status !== 'active') sbIdx = (sbIdx + 1) % this.players.length;
-    this.sbIndex = sbIdx;
     
-    let bbIdx = (sbIdx + 1) % this.players.length;
-    while (this.players[bbIdx].status !== 'active') bbIdx = (bbIdx + 1) % this.players.length;
-    this.bbIndex = bbIdx;
+    // Find active players for blinds
+    const activeIndices = [];
+    for (let i = 0; i < this.players.length; i++) {
+        const idx = (this.dealerIndex + i) % this.players.length;
+        if (this.players[idx].status === 'active') {
+            activeIndices.push(idx);
+        }
+    }
 
-    this.postBlind(this.players[sbIdx], this.smallBlind);
-    this.postBlind(this.players[bbIdx], this.bigBlind);
+    if (activeIndices.length === 2) {
+        // Heads-up logic: Dealer is SB, next is BB
+        this.sbIndex = activeIndices[0];
+        this.bbIndex = activeIndices[1];
+    } else {
+        // Standard logic: next after dealer is SB, next after that is BB
+        this.sbIndex = activeIndices[1 % activeIndices.length];
+        this.bbIndex = activeIndices[2 % activeIndices.length];
+    }
+
+    this.postBlind(this.players[this.sbIndex], this.smallBlind);
+    this.postBlind(this.players[this.bbIndex], this.bigBlind);
     
-    this.currentPlayerIndex = (bbIdx + 1) % this.players.length;
-    while (this.players[this.currentPlayerIndex].status !== 'active') {
-        this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+    // Pre-flop: Player after BB starts (or SB if heads-up)
+    if (activeIndices.length === 2) {
+        this.currentPlayerIndex = this.sbIndex;
+    } else {
+        let startIdx = (this.bbIndex + 1) % this.players.length;
+        while (this.players[startIdx].status !== 'active') {
+            startIdx = (startIdx + 1) % this.players.length;
+        }
+        this.currentPlayerIndex = startIdx;
     }
 
     this.startTurnTimer();
@@ -167,6 +202,12 @@ export class Table {
     const player = this.players.find(p => p.id === playerId);
     if (!player) return { error: "Joueur non trouvé" };
     if (player.id !== this.players[this.currentPlayerIndex]?.id) return { error: "Ce n'est pas votre tour" };
+
+    // TAPAKA NY TIMER raha vao nanao action izy
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
 
     switch (action) {
       case 'fold':
@@ -392,17 +433,21 @@ export class Table {
 
       winners.forEach(w => {
         const player = this.players.find(p => p.id === w.playerId);
-        player.chips += winAmount;
-        
-        if (!consolidatedResults[player.id]) {
-          consolidatedResults[player.id] = {
-            playerId: player.id,
-            name: player.name,
-            amount: 0,
-            handName: HandEvaluator.getHandDescription(w.hand)
-          };
+        if (player) {
+          player.chips += winAmount;
+          
+          if (!consolidatedResults[player.id]) {
+            consolidatedResults[player.id] = {
+              playerId: player.id,
+              name: player.name,
+              amount: 0,
+              handName: HandEvaluator.getHandDescription(w.hand)
+            };
+          }
+          consolidatedResults[player.id].amount += winAmount;
+        } else {
+          console.warn(`Gagnant non trouvé à la table: ${w.playerId}. Jetons perdus ou à gérer.`);
         }
-        consolidatedResults[player.id].amount += winAmount;
       });
     }
 
@@ -445,6 +490,9 @@ export class Table {
 
   getStateForPlayer(playerId) {
     const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
+    const requester = this.players.find(p => p.id === playerId);
+    const requesterFolded = requester && (requester.status === 'folded' || requester.status === 'out');
+
     return {
       id: this.id,
       maxPlayers: this.maxPlayers,
@@ -457,22 +505,36 @@ export class Table {
       currentBet: this.currentBet,
       previousBet: this.previousBet,
       winnerInfo: this.winnerInfo,
-      players: this.players.map((p, index) => ({
-        id: p.id,
-        name: p.name,
-        chips: p.chips,
-        avatarUrl: p.avatarUrl,
-        bet: p.bet,
-        position: p.position,
-        status: p.status,
-        lastAction: p.lastAction,
-        role: index === this.dealerIndex ? 'dealer' : 
-              index === this.sbIndex ? 'small' : 
-              index === this.bbIndex ? 'big' : null,
-        cards: (p.id === playerId || this.gameState === 'showdown') ? p.cards : [],
-        handResult: (this.gameState === 'showdown' && p.status !== 'folded') ? 
-          HandEvaluator.getHandDescription(HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
-      }))
+      players: this.players.map((p, index) => {
+        // Condition henjana: 
+        // 1. Karatrao: foana no hita
+        // 2. Karatry ny hafa: hita IHANY raha showdown, tsy nanao fold ianao (requester), ary tsy nanao fold izy (p), 
+        //    ary nisy "call" (tsy hoe fold daholo ny hafa).
+        const isOwnCard = p.id === playerId;
+        const isShowdownReveal = this.gameState === 'showdown' && 
+                                 !requesterFolded && 
+                                 p.status !== 'folded' && 
+                                 this.winnerInfo && 
+                                 this.winnerInfo.length > 0 && 
+                                 this.winnerInfo[0].handName !== "TOUS LES AUTRES ONT FOLDÉ";
+
+        return {
+          id: p.id,
+          name: p.name,
+          chips: p.chips,
+          avatarUrl: p.avatarUrl,
+          bet: p.bet,
+          position: p.position,
+          status: p.status,
+          lastAction: p.lastAction,
+          role: index === this.dealerIndex ? 'dealer' : 
+                index === this.sbIndex ? 'small' : 
+                index === this.bbIndex ? 'big' : null,
+          cards: (isOwnCard || isShowdownReveal) ? p.cards : [],
+          handResult: (this.gameState === 'showdown' && p.status !== 'folded') ? 
+            HandEvaluator.getHandDescription(HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
+        };
+      })
     };
   }
 }
