@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
+import HistoriqueMain from './models/HistoriqueMain.js';
 import { tableManager } from './logic/TableManager.js';
 import sequelize from './config/database.js';
 import { connectDB } from './config/database.js';
@@ -133,7 +134,7 @@ function setupTableCallbacks(table) {
       try {
         await HistoriqueMain.create({
           table_name: table.id,
-          cartes_communautema: table.communityCards.map(c => c.value + c.suit),
+          cartes_communaute: table.communityCards.map(c => c.value + c.suit),
           in_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({
             pseudo: p.name,
             cards: p.cards.map(c => c.value + c.suit)
@@ -280,7 +281,9 @@ io.on('connection', (socket) => {
         broadcastTableState(table);
       }
     } catch (err) {
-      await t.rollback();
+      if (t && !t.finished) {
+        await t.rollback();
+      }
       console.error('Détails de l\'erreur joinTable:', err);
       socket.emit('error', { message: `Erreur serveur: ${err.message}` });
     }

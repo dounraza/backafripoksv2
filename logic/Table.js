@@ -42,12 +42,18 @@ export class Table {
   startTurnTimer() {
     if (this.turnTimer) clearTimeout(this.turnTimer);
     
+    console.log(`Démarrage timer pour joueur index ${this.currentPlayerIndex}`);
+
     this.turnTimer = setTimeout(() => {
       const activePlayer = this.players[this.currentPlayerIndex];
+      console.log(`Timer écoulé. Joueur actif:`, activePlayer ? activePlayer.name : 'Aucun', `GameState:`, this.gameState);
+      
       if (activePlayer && this.gameState === 'playing') {
-        console.log(`Timer écoulé pour ${activePlayer.name}, auto-fold.`);
+        console.log(`Execution auto-fold pour ${activePlayer.name}`);
         this.handleAction(activePlayer.id, 'fold');
         this.notify();
+      } else {
+        console.log("Condition auto-fold non remplie (soit pas de joueur actif, soit gameState != 'playing')");
       }
     }, 15000); // 15 secondes
   }
@@ -213,6 +219,14 @@ export class Table {
       case 'fold':
         player.status = 'folded';
         player.lastAction = 'fold';
+        
+        // 1v1 logic: Raha 1v1 ary nanao fold, dia ny mpilalao hafa rehetra (non-folded/out) dia lasa winner avy hatrany
+        const nonFolded = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
+        if (nonFolded.length === 1) {
+          this.collectBets();
+          this.finishHand(nonFolded[0]);
+          return { success: true };
+        }
         break;
       case 'check':
         if (player.bet < this.currentBet) return { error: "Vous ne pouvez pas checker" };
@@ -506,17 +520,8 @@ export class Table {
       previousBet: this.previousBet,
       winnerInfo: this.winnerInfo,
       players: this.players.map((p, index) => {
-        // Condition henjana: 
-        // 1. Karatrao: foana no hita
-        // 2. Karatry ny hafa: hita IHANY raha showdown, tsy nanao fold ianao (requester), ary tsy nanao fold izy (p), 
-        //    ary nisy "call" (tsy hoe fold daholo ny hafa).
         const isOwnCard = p.id === playerId;
-        const isShowdownReveal = this.gameState === 'showdown' && 
-                                 !requesterFolded && 
-                                 p.status !== 'folded' && 
-                                 this.winnerInfo && 
-                                 this.winnerInfo.length > 0 && 
-                                 this.winnerInfo[0].handName !== "TOUS LES AUTRES ONT FOLDÉ";
+        const someoneWonByFold = this.winnerInfo && this.winnerInfo.length > 0 && this.winnerInfo[0].handName === "TOUS LES AUTRES ONT FOLDÉ";
 
         return {
           id: p.id,
@@ -530,7 +535,7 @@ export class Table {
           role: index === this.dealerIndex ? 'dealer' : 
                 index === this.sbIndex ? 'small' : 
                 index === this.bbIndex ? 'big' : null,
-          cards: (isOwnCard || isShowdownReveal) ? p.cards : [],
+          cards: (p.status === 'folded' || p.status === 'out') ? [] : (isOwnCard || this.gameState === 'showdown') ? p.cards : [],
           handResult: (this.gameState === 'showdown' && p.status !== 'folded') ? 
             HandEvaluator.getHandDescription(HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
         };

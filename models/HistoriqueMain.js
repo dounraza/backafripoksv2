@@ -6,17 +6,26 @@ const HistoriqueMain = sequelize.define('HistoriqueMain', {
     type: DataTypes.STRING,
     allowNull: false
   },
-  cartes_communautema: {
+  cartes_communaute: { // Nom corrigé
     type: DataTypes.JSON, // Stocke ["7s","Qc","4h","6s","2c"]
     allowNull: true
   },
-  in_joueurs: {
-    type: DataTypes.JSON, // Stocke [{"pseudo":"...","cards":["..."]}]
-    allowNull: false
+  main_joueurs: { // Colonne réintroduite selon l'exemple
+    type: DataTypes.JSON,
+    allowNull: false,
+    defaultValue: '[]' // Ajout de la valeur par défaut pour éviter null
+  },
+  foldes: { // Colonne STRING (VARSTRING)
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  gagnants: { // Colonne STRING (VARSTRING)
+    type: DataTypes.STRING,
+    allowNull: true
   }
 }, {
   tableName: 'historique_main',
-  timestamps: true
+  timestamps: false // Désactivation des timestamps
 });
 
 export default HistoriqueMain;
