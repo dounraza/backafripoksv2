@@ -47,14 +47,17 @@ export class Table {
 
     this.turnTimer = setTimeout(() => {
       const activePlayer = this.players[this.currentPlayerIndex];
-      console.log(`Timer écoulé. Joueur actif:`, activePlayer ? activePlayer.name : 'Aucun', `GameState:`, this.gameState);
       
       if (activePlayer && this.gameState === 'playing') {
-        console.log(`Execution auto-fold pour ${activePlayer.name}`);
-        this.handleAction(activePlayer.id, 'fold');
+        // Règle standard: Si le joueur peut checker, on fait check. Sinon, on fold.
+        if (activePlayer.bet === this.currentBet) {
+          console.log(`Auto-check pour ${activePlayer.name}`);
+          this.handleAction(activePlayer.id, 'check');
+        } else {
+          console.log(`Auto-fold pour ${activePlayer.name}`);
+          this.handleAction(activePlayer.id, 'fold');
+        }
         this.notify();
-      } else {
-        console.log("Condition auto-fold non remplie (soit pas de joueur actif, soit gameState != 'playing')");
       }
     }, 15000); // 15 secondes
   }
@@ -319,6 +322,17 @@ export class Table {
       this.collectBets();
       this.nextPhase();
       return;
+    }
+
+    // Auto-check logic for Big Blind pre-flop if no raises
+    const currentPlayer = this.players[this.currentPlayerIndex];
+    if (this.currentPhase === 'pre-flop' && 
+        currentPlayer.position === this.bbIndex && 
+        currentPlayer.bet === this.currentBet && 
+        !currentPlayer.hasActed) {
+        console.log(`Auto-check pour BB: ${currentPlayer.name}`);
+        this.handleAction(currentPlayer.id, 'check');
+        return;
     }
 
     let nextIndex = (this.currentPlayerIndex + 1) % this.players.length;
