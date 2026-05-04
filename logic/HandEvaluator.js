@@ -83,7 +83,42 @@ export class HandEvaluator {
     return { score: this.HAND_TYPES.HIGH_CARD, high: parsedCards[0].value, kicker: parsedCards.slice(1, 5).map(c => c.value) };
   }
 
+  static evaluateOmaha(holeCards, communityCards) {
+    const holeCombos = this.getCombinations(holeCards, 2);
+    const boardCombos = this.getCombinations(communityCards, 3);
+    
+    let bestHand = null;
+
+    for (const hCombo of holeCombos) {
+      for (const bCombo of boardCombos) {
+        const currentHand = this.evaluate([...hCombo, ...bCombo]);
+        if (!bestHand || this.compare(currentHand, bestHand) > 0) {
+          bestHand = currentHand;
+        }
+      }
+    }
+    return bestHand;
+  }
+
+  static getCombinations(arr, k) {
+    const results = [];
+    function helper(start, combo) {
+      if (combo.length === k) {
+        results.push([...combo]);
+        return;
+      }
+      for (let i = start; i < arr.length; i++) {
+        combo.push(arr[i]);
+        helper(i + 1, combo);
+        combo.pop();
+      }
+    }
+    helper(0, []);
+    return results;
+  }
+
   static getHandDescription(result) {
+    if (!result) return "";
     const valueToName = (val) => {
       const names = { 11: 'Jacks', 12: 'Queens', 13: 'Kings', 14: 'Aces' };
       return names[val] || `${val}'s`;

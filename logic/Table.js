@@ -4,6 +4,7 @@ import { HandEvaluator } from './HandEvaluator.js';
 export class Table {
   constructor(id, config = {}) {
     this.id = id;
+    this.gameType = config.gameType || 'holdem';
     this.maxPlayers = config.maxPlayers || 6;
     this.minBuyIn = config.minBuyIn || 400;
     this.smallBlind = config.smallBlind || 10;
@@ -145,7 +146,11 @@ export class Table {
       p.resetForNewHand();
       p.lastAction = null;
       if (p.chips > 0) {
-        p.cards = [this.deck.pop(), this.deck.pop()];
+        const numCards = this.gameType === 'omaha' ? 4 : 2;
+        p.cards = [];
+        for (let i = 0; i < numCards; i++) {
+          p.cards.push(this.deck.pop());
+        }
         p.status = 'active';
       } else {
         p.status = 'out';
@@ -415,10 +420,18 @@ export class Table {
 
   determineWinners() {
     const nonFoldedPlayers = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
-    const playerHands = nonFoldedPlayers.map(p => ({
-      playerId: p.id,
-      hand: HandEvaluator.evaluate([...p.cards, ...this.communityCards])
-    }));
+    const playerHands = nonFoldedPlayers.map(p => {
+      let hand;
+      if (this.gameType === 'omaha') {
+        hand = HandEvaluator.evaluateOmaha(p.cards, this.communityCards);
+      } else {
+        hand = HandEvaluator.evaluate([...p.cards, ...this.communityCards]);
+      }
+      return {
+        playerId: p.id,
+        hand: hand
+      };
+    });
 
     const consolidatedResults = {}; // playerId -> { amount, handName, name }
 
@@ -499,7 +512,7 @@ export class Table {
         this.startHand();
       }
       this.notify();
-    }, 5000);
+    }, 12000);
   }
 
   getStateForPlayer(playerId) {
@@ -509,6 +522,7 @@ export class Table {
 
     return {
       id: this.id,
+      gameType: this.gameType,
       maxPlayers: this.maxPlayers,
       gameState: this.gameState,
       communityCards: this.communityCards,
@@ -536,8 +550,8 @@ export class Table {
                 index === this.sbIndex ? 'small' : 
                 index === this.bbIndex ? 'big' : null,
           cards: (p.status === 'folded' || p.status === 'out') ? [] : (isOwnCard || this.gameState === 'showdown') ? p.cards : [],
-          handResult: (this.gameState === 'showdown' && p.status !== 'folded') ? 
-            HandEvaluator.getHandDescription(HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
+          handResult: (this.gameState === 'showdown' && p.status !== 'folded' && !someoneWonByFold) ? 
+            HandEvaluator.getHandDescription(this.gameType === 'omaha' ? HandEvaluator.evaluateOmaha(p.cards, this.communityCards) : HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
         };
       })
     };

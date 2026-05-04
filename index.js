@@ -167,7 +167,8 @@ io.on('connection', (socket) => {
           table = tableManager.createTable(sTableId, {
             smallBlind: parseFloat(tableData.smallBlind),
             bigBlind: parseFloat(tableData.bigBlind),
-            minBuyIn: parseFloat(tableData.cave)
+            minBuyIn: parseFloat(tableData.cave),
+            gameType: tableData.gameType
           });
           console.log(`Nouvelle table logique créée : ${sTableId}`);
           setupTableCallbacks(table); 
