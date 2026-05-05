@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import HistoriqueMain from './models/HistoriqueMain.js';
+import RevenuRake from './models/RevenuRake.js';
 import { tableManager } from './logic/TableManager.js';
 import sequelize from './config/database.js';
 import { connectDB } from './config/database.js';
@@ -130,19 +131,32 @@ function setupTableCallbacks(table) {
   }
   // Enregistrement historique
   if (!table.onHandEnd) {
-    table.setHandEndCallback(async (playersData) => {
+    table.setHandEndCallback(async (playersData, rake) => {
       try {
-        await HistoriqueMain.create({
+        const historique = await HistoriqueMain.create({
           table_name: table.id,
           cartes_communaute: table.communityCards.map(c => c.value + c.suit),
-          in_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({
+          main_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({
             pseudo: p.name,
             cards: p.cards.map(c => c.value + c.suit)
-          }))
+          })),
+          rake: rake
         });
-        console.log(`Historique enregistré pour la table ${table.id}`);
+        
+        if (rake > 0) {
+          const now = new Date();
+          await RevenuRake.create({
+            montant: rake,
+            historiqueMainId: historique.id,
+            date: now,
+            month: now.getMonth() + 1, // Janvier = 0
+            year: now.getFullYear()
+          });
+        }
+        
+        console.log(`Historique et RevenuRake enregistrés pour la table ${table.id} avec un rake de ${rake}`);
       } catch (err) {
-        console.error('Erreur lors de l\'enregistrement de l\'historique:', err);
+        console.error('Erreur lors de l\'enregistrement de l\'historique et du rake:', err);
       }
     });
   }

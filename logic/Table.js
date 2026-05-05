@@ -26,6 +26,7 @@ export class Table {
     this.turnTimer = null;
     this.currentBet = this.bigBlind; 
     this.previousBet = 0;
+    this.totalRake = 0;
   }
 
   setUpdateCallback(cb) {
@@ -141,6 +142,7 @@ export class Table {
     this.currentBet = this.bigBlind;
     this.previousBet = 0;
     this.winnerInfo = null;
+    this.totalRake = 0;
     
     this.createDeck();
     this.shuffleDeck();
@@ -467,9 +469,10 @@ export class Table {
       eligibleHands.sort((a, b) => HandEvaluator.compare(b.hand, a.hand));
       const winners = eligibleHands.filter(h => HandEvaluator.compare(h.hand, eligibleHands[0].hand) === 0);
       
-      // Calcul du rake (5%)
-      const rake = Math.floor(pot.amount * 0.05);
-      const amountToDistribute = pot.amount - rake;
+    // Calcul du rake (5%)
+      const potRake = Math.floor(pot.amount * 0.05);
+      this.totalRake += potRake;
+      const amountToDistribute = pot.amount - potRake;
       const winAmount = Math.floor(amountToDistribute / winners.length);
 
       winners.forEach(w => {
@@ -514,7 +517,7 @@ export class Table {
     this.notify();
 
     if (this.onHandEnd) {
-      this.onHandEnd(this.players.map(p => ({ name: p.name, chips: p.chips })));
+      this.onHandEnd(this.players.map(p => ({ name: p.name, chips: p.chips })), this.totalRake);
     }
 
     setTimeout(() => {

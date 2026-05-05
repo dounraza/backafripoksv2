@@ -22,6 +22,11 @@ const HistoriqueMain = sequelize.define('HistoriqueMain', {
   gagnants: { // Colonne STRING (VARSTRING)
     type: DataTypes.STRING,
     allowNull: true
+  },
+  rake: {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: false,
+    defaultValue: 0.00
   }
 }, {
   tableName: 'historique_main',
