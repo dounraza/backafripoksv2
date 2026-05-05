@@ -259,9 +259,12 @@ export class Table {
         break;
       case 'raise':
         const raiseTotal = amount;
-        const minRaise = this.currentBet + Math.max(this.bigBlind, this.currentBet - (this.previousBet || 0));
+        // Si c'est la première mise, le minRaise est le bigBlind (ou le double de la mise actuelle)
+        const minRaise = this.currentBet === 0 ? this.bigBlind : this.currentBet * 2;
         
-        if (raiseTotal < minRaise && raiseTotal < player.chips + player.bet) {
+        const isAllIn = (raiseTotal === player.chips + player.bet);
+        
+        if (raiseTotal < minRaise && !isAllIn) {
              return { error: `Relance insuffisante. Minimum: ${minRaise} MGA` };
         }
         
@@ -279,11 +282,11 @@ export class Table {
             player.lastAction = 'all-in';
         }
         
-        // Reset hasActed for others
         this.players.forEach(p => {
           if (p.status === 'active' && p.id !== player.id) p.hasActed = false;
         });
         player.hasActed = true;
+        this.collectBets(); 
         break;
       case 'all-in':
         const allInAmount = player.chips; // Amount player has remaining
