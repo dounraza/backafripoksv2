@@ -286,7 +286,6 @@ export class Table {
           if (p.status === 'active' && p.id !== player.id) p.hasActed = false;
         });
         player.hasActed = true;
-        this.collectBets(); 
         break;
       case 'all-in':
         const allInAmount = player.chips; // Amount player has remaining
@@ -313,6 +312,7 @@ export class Table {
   moveToNextPlayer() {
     const activePlayers = this.players.filter(p => p.status === 'active');
     const nonFoldedPlayers = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
+    const playersWithChips = activePlayers.filter(p => p.chips > 0);
 
     if (nonFoldedPlayers.length === 1) {
       this.collectBets();
@@ -323,7 +323,11 @@ export class Table {
     // Check if betting round is over
     const allMatched = nonFoldedPlayers.every(p => p.status === 'all-in' || (p.bet === this.currentBet && p.hasActed));
     
-    if (allMatched) {
+    // NOUVEAU: Si un seul joueur (ou zéro) a encore des jetons pour miser, on ne peut plus relancer.
+    // Si tout le monde a suivi la mise actuelle, on passe à la suite.
+    const noMoreBettingPossible = playersWithChips.length <= 1;
+
+    if (allMatched || (noMoreBettingPossible && nonFoldedPlayers.every(p => p.bet === this.currentBet || p.status === 'all-in'))) {
       this.collectBets();
       this.nextPhase();
       return;
@@ -397,6 +401,10 @@ export class Table {
     // If only one active player remains (others all-in or folded), we might go straight to showdown
     if (activePlayers.length <= 1 && allInPlayers.length > 0) {
         console.log("Only one active player (or zero) with all-ins. Running out community cards.");
+        
+        // ESSENTIEL: Collecter les mises avant de passer au run-out / showdown
+        this.collectBets();
+
         // Run out community cards
         while (this.communityCards.length < 5) {
             if (this.communityCards.length === 0) this.communityCards = [this.deck.pop(), this.deck.pop(), this.deck.pop()];
@@ -536,7 +544,15 @@ export class Table {
   }
 
   getStateForPlayer(playerId) {
-    const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
+    const someoneWonByFold = this.winnerInfo && this.winnerInfo.length > 0 && this.winnerInfo[0].handName === "TOUS LES AUTRES ONT FOLDÉ";
+    
+    const totalPot = this.pots.reduce((sum, p) => {
+      // Pas de rake si quelqu'un a gagné car tous les autres ont foldé
+      // Pas de rake s'il n'y a qu'un seul joueur éligible (cas du pot non suivi)
+      const rake = (!someoneWonByFold && p.eligiblePlayerIds.length > 1) ? Math.floor(p.amount * 0.05) : 0;
+      return sum + (p.amount - rake);
+    }, 0);
+
     const requester = this.players.find(p => p.id === playerId);
     const requesterFolded = requester && (requester.status === 'folded' || requester.status === 'out');
 

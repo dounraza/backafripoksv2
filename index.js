@@ -58,14 +58,14 @@ app.use('/api/tables', tableRoutes);
 app.use('/api/solde', soldeRoutes);
 
 // Initialiser la connexion DB et synchroniser les modèles
-connectDB().then(async () => {
-  try {
-    await sequelize.sync(); // Retrait de { alter: true } pour éviter l'erreur de clés multiples
-    console.log('Modèles synchronisés avec la base de données.');
-  } catch (error) {
-    console.error('Erreur lors de la synchronisation des modèles :', error);
-  }
-});
+try {
+  await connectDB();
+  await sequelize.sync(); // Retrait de { alter: true } pour éviter l'erreur de clés multiples
+  console.log('Modèles synchronisés avec la base de données.');
+} catch (error) {
+  console.error('Erreur fatale lors de l\'initialisation de la base de données :', error);
+  process.exit(1);
+}
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
