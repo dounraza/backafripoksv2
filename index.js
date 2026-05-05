@@ -222,6 +222,8 @@ io.on('connection', (socket) => {
       const existingPlayer = table.players.find(p => p.name === playerName);
       if (existingPlayer) {
         const addAmount = parseInt(buyIn) || 0;
+        
+        // Logique stricte : Si addAmount > 0, on recharge, sinon on ignore la recharge
         if (addAmount > 0) {
             if (parseFloat(user.Solde.montant) < addAmount) {
                 await t.rollback();
@@ -232,10 +234,14 @@ io.on('connection', (socket) => {
             await user.Solde.save({ transaction: t });
             existingPlayer.chips += addAmount;
             console.log(`Recharge de ${playerName}: +${addAmount} MGA. Nouveaux jetons: ${existingPlayer.chips}`);
+        } else {
+            // Reconnexion simple : On ne touche pas aux jetons (chips) actuels du joueur à la table
+            console.log(`Reconnexion simple de ${playerName}. Jetons conservés: ${existingPlayer.chips}`);
         }
         
         await t.commit();
-        console.log(`Reconnexion/Recharge de ${playerName} (Socket ID mis à jour: ${socket.id})`);
+        console.log(`Reconnexion de ${playerName} (Socket ID mis à jour: ${socket.id})`);
+        
         // UPDATE CRITIQUE: Mettre à jour l'ID ET LE NOM dans la logique de la table aussi
         existingPlayer.id = socket.id; 
         existingPlayer.name = playerName; // Synchronisation du pseudo
