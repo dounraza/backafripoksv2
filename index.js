@@ -236,8 +236,9 @@ io.on('connection', (socket) => {
         
         await t.commit();
         console.log(`Reconnexion/Recharge de ${playerName} (Socket ID mis à jour: ${socket.id})`);
-        // UPDATE CRITIQUE: Mettre à jour l'ID dans la logique de la table aussi
+        // UPDATE CRITIQUE: Mettre à jour l'ID ET LE NOM dans la logique de la table aussi
         existingPlayer.id = socket.id; 
+        existingPlayer.name = playerName; // Synchronisation du pseudo
         socket.join(tableId);
 
         // Si la table était en attente, on vérifie si on peut lancer une main
