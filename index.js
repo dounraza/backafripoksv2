@@ -42,10 +42,10 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // Logger pour débugger les requêtes sur Railway
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url} - Origin: ${req.get('origin')}`);
-  next();
-});
+// app.use((req, res, next) => {
+//   console.log(`${req.method} ${req.url} - Origin: ${req.get('origin')}`);
+//   next();
+// });
 
 // Route de test pour vérifier si le serveur répond
 app.get('/', (req, res) => {
@@ -75,7 +75,10 @@ const io = new Server(httpServer, {
     credentials: true
   },
   allowEIO3: true,
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  pingInterval: 10000,
+  pingTimeout: 5000,
+  connectTimeout: 10000
 });
 
 // Middleware d'authentification Socket.io
@@ -105,15 +108,27 @@ io.use((socket, next) => {
   });
 });
 
+const tableUpdateTimers = new Map();
+
 function broadcastTableState(table) {
-  table.players.forEach(p => {
-    io.to(p.id).emit('tableUpdated', table.getStateForPlayer(p.id));
-  });
-  // Also notify the lobby about the updated player count
-  broadcastLobbyUpdate();
+  if (tableUpdateTimers.has(table.id)) return;
+
+  const timer = setTimeout(() => {
+    tableUpdateTimers.delete(table.id);
+    table.players.forEach(p => {
+      io.to(p.id).emit('tableUpdated', table.getStateForPlayer(p.id));
+    });
+  }, 100); // Throttle à 100ms pour fluidifier le serveur
+
+  tableUpdateTimers.set(table.id, timer);
 }
 
 function broadcastLobbyUpdate() {
+  // Limiter la fréquence des mises à jour du lobby
+  const now = Date.now();
+  if (global.lastLobbyUpdate && now - global.lastLobbyUpdate < 2000) return;
+  global.lastLobbyUpdate = now;
+
   const tables = tableManager.getAllTables();
   const updateData = tables.map(t => ({
     id: t.id,
@@ -127,7 +142,13 @@ function broadcastLobbyUpdate() {
 function setupTableCallbacks(table) {
   if (!table) return;
   if (!table.onUpdate) {
-    table.setUpdateCallback(() => broadcastTableState(table));
+    table.setUpdateCallback(() => {
+        broadcastTableState(table);
+        // On ne met à jour le lobby que si nécessaire (ex: changement de phase ou nombre de joueurs)
+        if (table.currentPhase === 'pre-flop' && table.gameState === 'waiting') {
+            broadcastLobbyUpdate();
+        }
+    });
   }
   // Enregistrement historique
   if (!table.onHandEnd) {
@@ -163,6 +184,7 @@ function setupTableCallbacks(table) {
 }
 
 let onlinePlayers = 0;
+const pendingRemovals = new Map(); // { playerName: timeoutId }
 
 io.on('connection', (socket) => {
   onlinePlayers++;
@@ -170,9 +192,19 @@ io.on('connection', (socket) => {
   console.log('Un joueur authentifié s\'est connecté :', socket.user.name, 'Socket ID:', socket.id, 'Total:', onlinePlayers);
 
   socket.on('joinTable', async ({ tableId, buyIn }) => {
-    const playerName = socket.user.name; // Sécurisé : on utilise le nom du token JWT
+    const playerName = socket.user.name?.trim(); 
+    if (!playerName) return socket.emit('error', { message: 'Nom d\'utilisateur invalide' });
+
+    // Annuler toute suppression en attente pour ce joueur
+    if (pendingRemovals.has(playerName)) {
+      clearTimeout(pendingRemovals.get(playerName));
+      pendingRemovals.delete(playerName);
+      console.log(`Suppression annulée pour ${playerName} (reconnexion rapide)`);
+    }
+
     const sTableId = String(tableId);
     let table = tableManager.getTable(sTableId);
+    // ... rest of table finding logic ...
 
     if (!table) {
       try {
@@ -218,36 +250,36 @@ io.on('connection', (socket) => {
         return socket.emit('error', { message: 'Utilisateur non trouvé' });
       }
 
-      // Check if player is already at the table
-      const existingPlayer = table.players.find(p => p.name === playerName);
+      const initialChips = parseInt(buyIn) || 0;
+
+      // Check if player is already at the table - RECHERCHE PLUS ROBUSTE (Case-insensitive + Trim)
+      const existingPlayer = table.players.find(p => 
+        p.name.trim().toLowerCase() === playerName.toLowerCase()
+      );
+
       if (existingPlayer) {
-        const addAmount = parseInt(buyIn) || 0;
+        const addAmount = initialChips; 
         
-        // Logique stricte : Si addAmount > 0, on recharge, sinon on ignore la recharge
         if (addAmount > 0) {
             if (parseFloat(user.Solde.montant) < addAmount) {
                 await t.rollback();
                 return socket.emit('error', { message: `Solde insuffisant pour recharger. Vous avez ${user.Solde.montant} MGA` });
             }
-            // Déduire du solde et ajouter aux jetons
             user.Solde.montant = parseFloat(user.Solde.montant) - addAmount;
             await user.Solde.save({ transaction: t });
             existingPlayer.chips += addAmount;
             console.log(`Recharge de ${playerName}: +${addAmount} MGA. Nouveaux jetons: ${existingPlayer.chips}`);
         } else {
-            // Reconnexion simple : On ne touche pas aux jetons (chips) actuels du joueur à la table
             console.log(`Reconnexion simple de ${playerName}. Jetons conservés: ${existingPlayer.chips}`);
         }
         
         await t.commit();
         console.log(`Reconnexion de ${playerName} (Socket ID mis à jour: ${socket.id})`);
         
-        // UPDATE CRITIQUE: Mettre à jour l'ID ET LE NOM dans la logique de la table aussi
         existingPlayer.id = socket.id; 
-        existingPlayer.name = playerName; // Synchronisation du pseudo
+        existingPlayer.name = playerName;
         socket.join(tableId);
 
-        // Si la table était en attente, on vérifie si on peut lancer une main
         if (table.gameState === 'waiting' && table.players.filter(p => p.chips > 0).length >= 2) {
             console.log(`Lancement automatique de la main après recharge de ${playerName}`);
             table.startHand();
@@ -257,29 +289,34 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // NOUVELLE SÉCURITÉ : Si buyIn est 0 et pas de joueur existant, on refuse l'entrée
+      if (initialChips <= 0) {
+        await t.rollback();
+        console.log(`Reconnexion refusée pour ${playerName} : Session expirée ou jetons épuisés.`);
+        return socket.emit('error', { message: 'Votre session à cette table a expiré. Veuillez re-cave depuis le lobby.' });
+      }
+
       if (!user.Solde) {
         await t.rollback();
         console.log(`Solde non trouvé pour l'utilisateur: ${playerName}`);
         return socket.emit('error', { message: 'Compte solde non trouvé' });
       }
 
-      const initialChips = parseInt(buyIn) || 0;
-      if (initialChips > 0 && initialChips < table.minBuyIn) {
+      if (initialChips < table.minBuyIn) {
         await t.rollback();
         return socket.emit('error', { message: `Le montant minimum pour cette table est de ${table.minBuyIn} MGA` });
       }
 
-      if (initialChips > 0 && parseFloat(user.Solde.montant) < initialChips) {
+      if (parseFloat(user.Solde.montant) < initialChips) {
         await t.rollback();
         return socket.emit('error', { message: `Solde insuffisant. Vous avez ${user.Solde.montant} MGA` });
       }
 
-      if (initialChips > 0) {
-        // Déduire le montant du solde
-        user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
-        await user.Solde.save({ transaction: t });
-        console.log(`Solde mis à jour pour ${playerName}: -${initialChips} MGA (Nouveau: ${user.Solde.montant})`);
-      }
+      // Déduire le montant du solde
+      user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
+      await user.Solde.save({ transaction: t });
+      console.log(`Solde mis à jour pour ${playerName}: -${initialChips} MGA (Nouveau: ${user.Solde.montant})`);
+
 
       const player = table.addPlayer(socket.id, playerName, initialChips, user.avatar_url);
       if (player.error) {
@@ -379,15 +416,22 @@ io.on('connection', (socket) => {
   socket.on('disconnect', async () => {
     onlinePlayers--;
     io.emit('onlineCount', onlinePlayers);
-    console.log('Joueur déconnecté :', socket.id, 'Total:', onlinePlayers);
     
-    // Miandry 5 segondra vao manaisotra ny mpilalao (Grace period for refresh)
-    setTimeout(async () => {
+    const playerName = socket.user?.name?.trim();
+    if (!playerName) return;
+
+    console.log(`Joueur déconnecté : ${playerName} (ID: ${socket.id}). Lancement du délai de grâce de 10s...`);
+    
+    // On enregistre un timeout pour supprimer le joueur s'il ne revient pas
+    const timeoutId = setTimeout(async () => {
+      pendingRemovals.delete(playerName);
       const tables = tableManager.getAllTables();
       for (const table of tables) {
-        // Jereo raha mbola ilay socket ID taloha no ao (izany hoe mbola tsy nanao rejoin izy)
+        // IMPORTANT: On vérifie si le joueur est toujours associé à CE socket ID précis
+        // S'il a rejoint entre temps, son ID aura changé et on ne le supprimera pas
         const player = table.players.find(p => p.id === socket.id);
         if (player) {
+          console.log(`Délai expiré pour ${playerName}. Suppression de la table.`);
           const result = table.removePlayer(socket.id);
           if (result) {
             await returnChipsToUser(result.name, result.chips);
@@ -395,7 +439,9 @@ io.on('connection', (socket) => {
           }
         }
       }
-    }, 5000); // 5 segondra malalaka tsara hanaovana refresh
+    }, 10000); // 10 secondes de grâce (mieux pour le Cloud/Mobile)
+
+    pendingRemovals.set(playerName, timeoutId);
   });
 });
 
