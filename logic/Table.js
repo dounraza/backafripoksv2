@@ -7,7 +7,7 @@ export class Table {
   constructor(id, config = {}) {
     this.id = id;
     this.gameType = config.gameType || 'holdem';
-    this.maxPlayers = config.maxPlayers || 8; // Changé à 8 pour tester
+    this.maxPlayers = config.maxPlayers || 9;
     this.minBuyIn = config.minBuyIn || 400;
     this.smallBlind = config.smallBlind || 10;
     this.bigBlind = config.bigBlind || 20;
@@ -70,6 +70,11 @@ export class Table {
   addPlayer(id, name, chips, avatarUrl = null) {
     if (this.players.length >= this.maxPlayers) return { error: 'Table pleine' };
     const player = new Player(id, name, chips, avatarUrl);
+    
+    // Si la partie est déjà lancée, le nouveau joueur attend la prochaine main
+    if (this.gameState === 'playing') {
+        player.status = 'waiting';
+    }
     
     const occupiedPositions = this.players.map(p => p.position);
     for (let i = 0; i < this.maxPlayers; i++) {
