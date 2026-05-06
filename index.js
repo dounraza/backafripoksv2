@@ -195,11 +195,21 @@ io.on('connection', (socket) => {
     const playerName = socket.user.name?.trim(); 
     if (!playerName) return socket.emit('error', { message: 'Nom d\'utilisateur invalide' });
 
-    // Annuler toute suppression en attente pour ce joueur
-    if (pendingRemovals.has(playerName)) {
-      clearTimeout(pendingRemovals.get(playerName));
-      pendingRemovals.delete(playerName);
-      console.log(`Suppression annulée pour ${playerName} (reconnexion rapide)`);
+    // SÉCURITÉ : Quitter toute autre table avant d'en rejoindre une nouvelle
+    const allTables = tableManager.getAllTables();
+    for (const t of allTables) {
+      if (t.id !== String(tableId)) {
+          const p = t.players.find(p => p.id === socket.id || p.name.trim().toLowerCase() === playerName.toLowerCase());
+          if (p) {
+              console.log(`Le joueur ${playerName} quitte automatiquement la table ${t.id} pour rejoindre ${tableId}`);
+              const result = t.removePlayer(p.id);
+              if (result) {
+                await returnChipsToUser(result.name, result.chips);
+              }
+              socket.leave(t.id);
+              broadcastTableState(t);
+          }
+      }
     }
 
     const sTableId = String(tableId);

@@ -1,5 +1,7 @@
 import { Player } from './Player.js';
 import { HandEvaluator } from './HandEvaluator.js';
+// poker-ts est utilisé comme référence pour les règles de mise (raise/minraise)
+import { Table as PokerTS } from 'poker-ts';
 
 export class Table {
   constructor(id, config = {}) {
@@ -26,6 +28,7 @@ export class Table {
     this.turnTimer = null;
     this.currentBet = this.bigBlind; 
     this.previousBet = 0;
+    this.lastRaiseIncrement = this.bigBlind;
     this.totalRake = 0;
   }
 
@@ -141,6 +144,7 @@ export class Table {
     this.pots = [];
     this.currentBet = this.bigBlind;
     this.previousBet = 0;
+    this.lastRaiseIncrement = this.bigBlind;
     this.winnerInfo = null;
     this.totalRake = 0;
     
@@ -259,8 +263,8 @@ export class Table {
         break;
       case 'raise':
         const raiseTotal = amount;
-        // Si c'est la première mise, le minRaise est le bigBlind (ou le double de la mise actuelle)
-        const minRaise = this.currentBet === 0 ? this.bigBlind : this.currentBet * 2;
+        // Règle standard Poker (utilisée par poker-ts): minRaise = miseActuelle + dernierIncrement
+        const minRaise = this.currentBet + this.lastRaiseIncrement;
         
         const isAllIn = (raiseTotal === player.chips + player.bet);
         
@@ -270,6 +274,11 @@ export class Table {
         
         const amountToAdd = raiseTotal - player.bet;
         if (amountToAdd > player.chips) return { error: "Pas assez de jetons" };
+
+        const currentIncrement = raiseTotal - this.currentBet;
+        if (currentIncrement >= this.lastRaiseIncrement) {
+            this.lastRaiseIncrement = currentIncrement;
+        }
 
         this.previousBet = this.currentBet;
         player.chips -= amountToAdd;
@@ -295,6 +304,11 @@ export class Table {
         player.lastAction = 'all-in';
         // If all-in amount is greater than current bet, it becomes the new current bet
         if (player.bet > this.currentBet) {
+          const increment = player.bet - this.currentBet;
+          if (increment >= this.lastRaiseIncrement) {
+              this.lastRaiseIncrement = increment;
+              this.previousBet = this.currentBet;
+          }
           this.currentBet = player.bet;
           // Reset hasActed for other active players since there's a new bet to match
           this.players.forEach(p => {
@@ -384,6 +398,7 @@ export class Table {
     });
     this.currentBet = 0;
     this.previousBet = 0;
+    this.lastRaiseIncrement = this.bigBlind;
   }
 
   nextPhase() {
@@ -568,6 +583,7 @@ export class Table {
       currentPlayerIndex: this.currentPlayerIndex,
       currentBet: this.currentBet,
       previousBet: this.previousBet,
+      lastRaiseIncrement: this.lastRaiseIncrement,
       winnerInfo: this.winnerInfo,
       players: this.players.map((p, index) => {
         const isOwnCard = p.id === playerId;
