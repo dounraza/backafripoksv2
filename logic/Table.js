@@ -375,7 +375,7 @@ export class Table {
       const minBet = contributors[0].bet;
       const potAmount = minBet * contributors.length;
       const eligiblePlayerIds = contributors
-        .filter(p => p.status !== 'folded')
+        .filter(p => p.status === 'active' || p.status === 'all-in')
         .map(p => p.id);
 
       // Try to merge with last pot if eligible players are the same
@@ -461,7 +461,7 @@ export class Table {
   }
 
   determineWinners() {
-    const nonFoldedPlayers = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
+    const nonFoldedPlayers = this.players.filter(p => p.status === 'active' || p.status === 'all-in');
     const playerHands = nonFoldedPlayers.map(p => {
       let hand;
       if (this.gameType === 'omaha') {

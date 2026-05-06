@@ -76,9 +76,9 @@ const io = new Server(httpServer, {
   },
   allowEIO3: true,
   transports: ['websocket', 'polling'],
-  pingInterval: 10000,
-  pingTimeout: 5000,
-  connectTimeout: 10000
+  pingInterval: 30000,
+  pingTimeout: 20000,
+  connectTimeout: 20000
 });
 
 // Middleware d'authentification Socket.io
