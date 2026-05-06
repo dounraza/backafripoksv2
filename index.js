@@ -299,13 +299,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // NOUVELLE SÉCURITÉ : Si buyIn est 0 et pas de joueur existant, on refuse l'entrée
-      if (initialChips <= 0) {
-        await t.rollback();
-        console.log(`Reconnexion refusée pour ${playerName} : Session expirée ou jetons épuisés.`);
-        return socket.emit('error', { message: 'Votre session à cette table a expiré. Veuillez re-cave depuis le lobby.' });
-      }
-
+     
       if (!user.Solde) {
         await t.rollback();
         console.log(`Solde non trouvé pour l'utilisateur: ${playerName}`);
