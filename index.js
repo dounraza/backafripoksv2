@@ -306,10 +306,7 @@ io.on('connection', (socket) => {
         return socket.emit('error', { message: 'Compte solde non trouvé' });
       }
 
-      if (initialChips < table.minBuyIn) {
-        await t.rollback();
-        return socket.emit('error', { message: `Le montant minimum pour cette table est de ${table.minBuyIn} MGA` });
-      }
+    
 
       if (parseFloat(user.Solde.montant) < initialChips) {
         await t.rollback();
