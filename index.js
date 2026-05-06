@@ -139,6 +139,33 @@ function broadcastLobbyUpdate() {
   io.emit('lobbyUpdate', updateData);
 }
 
+function startRecaveTimer(player, table) {
+    const key = `${player.name}-${table.id}`;
+    if (recaveTimeouts.has(key)) return; // Déjà un timer en cours
+
+    console.log(`[Recave Timer] ${player.name} a 0 jetons sur la table ${table.id}. 15s pour recaver.`);
+    
+    const timeoutId = setTimeout(async () => {
+      recaveTimeouts.delete(key);
+      
+      // Re-vérifier si le joueur est toujours à 0 et toujours sur la table
+      const p = table.players.find(p => p.name === player.name);
+      if (p && p.chips <= 0) {
+        console.log(`[Auto-Kick] ${player.name} n'a pas recavé à temps. Expulsion de la table ${table.id}.`);
+        const result = table.removePlayer(p.id);
+        if (result) {
+          // Nettoyage socket et broadcast
+          const socket = io.sockets.sockets.get(p.id);
+          if (socket) socket.leave(table.id);
+          broadcastTableState(table);
+          broadcastLobbyUpdate();
+        }
+      }
+    }, 15000); // 15 secondes
+
+    recaveTimeouts.set(key, timeoutId);
+}
+
 function setupTableCallbacks(table) {
   if (!table) return;
   if (!table.onUpdate) {
@@ -148,43 +175,19 @@ function setupTableCallbacks(table) {
         if (table.currentPhase === 'pre-flop' && table.gameState === 'waiting') {
             broadcastLobbyUpdate();
         }
-    });
-  }
-  // Enregistrement historique
-  if (!table.onHandEnd) {
-    table.setHandEndCallback(async (playersData, rake) => {
-      try {
-        const historique = await HistoriqueMain.create({
-          table_name: table.id,
-          cartes_communaute: table.communityCards.map(c => c.value + c.suit),
-          main_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({
-            pseudo: p.name,
-            cards: p.cards.map(c => c.value + c.suit)
-          })),
-          rake: rake
+
+        // Vérifier si un joueur a 0 jetons à chaque mise à jour
+        table.players.forEach(player => {
+            if (player.chips <= 0) {
+                startRecaveTimer(player, table);
+            }
         });
-        
-        if (rake > 0) {
-          const now = new Date();
-          await RevenuRake.create({
-            montant: rake,
-            historiqueMainId: historique.id,
-            date: now,
-            month: now.getMonth() + 1, // Janvier = 0
-            year: now.getFullYear()
-          });
-        }
-        
-        console.log(`Historique et RevenuRake enregistrés pour la table ${table.id} avec un rake de ${rake}`);
-      } catch (err) {
-        console.error('Erreur lors de l\'enregistrement de l\'historique et du rake:', err);
-      }
     });
   }
 }
-
 let onlinePlayers = 0;
 const pendingRemovals = new Map(); // { playerName: timeoutId }
+const recaveTimeouts = new Map(); // { "playerName-tableId": timeoutId }
 
 io.on('connection', (socket) => {
   onlinePlayers++;
@@ -279,6 +282,14 @@ io.on('connection', (socket) => {
             await user.Solde.save({ transaction: t });
             existingPlayer.chips += addAmount;
             console.log(`Recharge de ${playerName}: +${addAmount} MGA. Nouveaux jetons: ${existingPlayer.chips}`);
+
+            // ANNULER LE TIMER DE RECAVE si existant
+            const key = `${playerName}-${tableId}`;
+            if (recaveTimeouts.has(key)) {
+                clearTimeout(recaveTimeouts.get(key));
+                recaveTimeouts.delete(key);
+                console.log(`[Recave Timer] Annulé pour ${playerName} (recave effectuée)`);
+            }
         } else {
             console.log(`Reconnexion simple de ${playerName}. Jetons conservés: ${existingPlayer.chips}`);
         }
@@ -295,7 +306,7 @@ io.on('connection', (socket) => {
             table.startHand();
         }
 
-        broadcastTableState(table);
+        table.notify(); // Assurer une notification immédiate de l'état mis à jour
         return;
       }
 
@@ -303,11 +314,6 @@ io.on('connection', (socket) => {
         await t.rollback();
         console.log(`Solde non trouvé pour l'utilisateur: ${playerName}`);
         return socket.emit('error', { message: 'Compte solde non trouvé' });
-      }
-
-      if (initialChips < table.minBuyIn) {
-        await t.rollback();
-        return socket.emit('error', { message: `Le montant minimum pour cette table est de ${table.minBuyIn} MGA` });
       }
 
       if (parseFloat(user.Solde.montant) < initialChips) {
@@ -378,9 +384,18 @@ io.on('connection', (socket) => {
   socket.on('leaveTable', async ({ tableId }) => {
     const table = tableManager.getTable(tableId);
     if (table) {
+      const playerName = socket.user?.name;
       const result = table.removePlayer(socket.id);
       if (result) {
         await returnChipsToUser(result.name, result.chips);
+        
+        // Nettoyer le timer de recave s'il existe
+        const key = `${result.name}-${tableId}`;
+        if (recaveTimeouts.has(key)) {
+            clearTimeout(recaveTimeouts.get(key));
+            recaveTimeouts.delete(key);
+            console.log(`[Recave Timer] Nettoyé pour ${result.name} (départ manuel)`);
+        }
       }
       socket.leave(tableId);
       console.log(`Joueur ${socket.id} a quitté la table ${tableId}`);

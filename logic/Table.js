@@ -7,12 +7,13 @@ export class Table {
   constructor(id, config = {}) {
     this.id = id;
     this.gameType = config.gameType || 'holdem';
-    this.maxPlayers = config.maxPlayers || 6;
+    this.maxPlayers = config.maxPlayers || 8; // Changé à 8 pour tester
     this.minBuyIn = config.minBuyIn || 400;
     this.smallBlind = config.smallBlind || 10;
     this.bigBlind = config.bigBlind || 20;
     
     this.players = []; 
+    
     this.gameState = 'waiting'; 
     this.deck = [];
     this.communityCards = [];
@@ -221,7 +222,12 @@ export class Table {
   handleAction(playerId, action, amount = 0) {
     const player = this.players.find(p => p.id === playerId);
     if (!player) return { error: "Joueur non trouvé" };
-    if (player.id !== this.players[this.currentPlayerIndex]?.id) return { error: "Ce n'est pas votre tour" };
+    
+    const currentPlayer = this.players[this.currentPlayerIndex];
+    if (player.id !== currentPlayer?.id) {
+        console.log(`[Turn Error] Action rejetée pour ${player.name} (ID: ${player.id}). Attente tour de : ${currentPlayer?.name} (ID: ${currentPlayer?.id})`);
+        return { error: "Ce n'est pas votre tour" };
+    }
 
     // TAPAKA NY TIMER raha vao nanao action izy
     if (this.turnTimer) {
@@ -601,7 +607,7 @@ export class Table {
           role: index === this.dealerIndex ? 'dealer' : 
                 index === this.sbIndex ? 'small' : 
                 index === this.bbIndex ? 'big' : null,
-          cards: (p.status === 'folded' || p.status === 'out') ? [] : (isOwnCard || this.gameState === 'showdown') ? p.cards : [],
+          cards: (p.status === 'folded' || p.status === 'out') ? [] : (isOwnCard || this.gameState === 'showdown' || p.name.startsWith('Bot')) ? p.cards : [],
           handResult: (this.gameState === 'showdown' && p.status !== 'folded' && !someoneWonByFold) ? 
             HandEvaluator.getHandDescription(this.gameType === 'omaha' ? HandEvaluator.evaluateOmaha(p.cards, this.communityCards) : HandEvaluator.evaluate([...p.cards, ...this.communityCards])) : null
         };
