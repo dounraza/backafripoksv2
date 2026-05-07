@@ -495,11 +495,11 @@ export class Table {
       eligibleHands.sort((a, b) => HandEvaluator.compare(b.hand, a.hand));
       const winners = eligibleHands.filter(h => HandEvaluator.compare(h.hand, eligibleHands[0].hand) === 0);
       
-    // Calcul du rake (5%)
-      const potRake = Math.floor(pot.amount * 0.05);
-      this.totalRake += potRake;
-      const amountToDistribute = pot.amount - potRake;
-      const winAmount = Math.floor(amountToDistribute / winners.length);
+      // Calcul du rake (5%) sur le pot actuel
+      const potRake = Number((pot.amount * 0.05).toFixed(2));
+      this.totalRake = Number((this.totalRake + potRake).toFixed(2));
+      const amountToDistribute = Number((pot.amount - potRake).toFixed(2));
+      const winAmount = Number((amountToDistribute / winners.length).toFixed(2));
 
       winners.forEach(w => {
         const player = this.players.find(p => p.id === w.playerId);
@@ -530,11 +530,17 @@ export class Table {
 
     if (singleWinner) {
       const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
-      singleWinner.chips += totalPot;
+      
+      // Calcul du rake (5%) même si le gagnant remporte le pot par fold
+      const rake = Number((totalPot * 0.05).toFixed(2));
+      this.totalRake = Number((this.totalRake + rake).toFixed(2));
+      const winAmount = Number((totalPot - rake).toFixed(2));
+      
+      singleWinner.chips += winAmount;
       this.winnerInfo = [{
         playerId: singleWinner.id,
         name: singleWinner.name,
-        amount: totalPot,
+        amount: winAmount,
         handName: "TOUS LES AUTRES ONT FOLDÉ"
       }];
     }
@@ -559,14 +565,11 @@ export class Table {
   }
 
   getStateForPlayer(playerId) {
-    const someoneWonByFold = this.winnerInfo && this.winnerInfo.length > 0 && this.winnerInfo[0].handName === "TOUS LES AUTRES ONT FOLDÉ";
-    
-    const totalPot = this.pots.reduce((sum, p) => {
-      // Pas de rake si quelqu'un a gagné car tous les autres ont foldé
-      // Pas de rake s'il n'y a qu'un seul joueur éligible (cas du pot non suivi)
-      const rake = (!someoneWonByFold && p.eligiblePlayerIds.length > 1) ? Math.floor(p.amount * 0.05) : 0;
-      return sum + (p.amount - rake);
-    }, 0);
+    // Calcul du pot total brut
+    const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
+    // Calcul du rake estimé (5%)
+    const estimatedRake = Number((totalPot * 0.05).toFixed(2));
+    const potAfterRake = Number((totalPot - estimatedRake).toFixed(2));
 
     const requester = this.players.find(p => p.id === playerId);
     const requesterFolded = requester && (requester.status === 'folded' || requester.status === 'out');
@@ -578,6 +581,8 @@ export class Table {
       gameState: this.gameState,
       communityCards: this.communityCards,
       pot: totalPot,
+      estimatedRake: estimatedRake,
+      potAfterRake: potAfterRake,
       pots: this.pots,
       currentPhase: this.currentPhase,
       currentPlayerIndex: this.currentPlayerIndex,
