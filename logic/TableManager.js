@@ -4,7 +4,7 @@ class TableManager {
   constructor() {
     this.tables = new Map();
     // Créer une table par défaut pour le test
-    this.createTable('default-table', { maxPlayers: 6 });
+    this.createTable('default-table', { maxPlayers: 9 });
   }
 
   createTable(id, config) {

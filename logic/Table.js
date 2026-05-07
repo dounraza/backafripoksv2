@@ -7,7 +7,7 @@ export class Table {
   constructor(id, config = {}) {
     this.id = id;
     this.gameType = config.gameType || 'holdem';
-    this.maxPlayers = config.maxPlayers || 6;
+    this.maxPlayers = config.maxPlayers || 9;
     this.minBuyIn = config.minBuyIn || 400;
     this.smallBlind = config.smallBlind || 10;
     this.bigBlind = config.bigBlind || 20;
@@ -42,6 +42,23 @@ export class Table {
 
   notify() {
     if (this.onUpdate) this.onUpdate();
+  }
+
+  sortPlayers() {
+    // Tehirizina ny ID-n'ny mpilalao manana anjara/role amin'izao fotoana izao
+    const currentPlayerId = this.players[this.currentPlayerIndex]?.id;
+    const dealerId = this.players[this.dealerIndex]?.id;
+    const sbId = this.players[this.sbIndex]?.id;
+    const bbId = this.players[this.bbIndex]?.id;
+
+    // Sorte-entsika araka ny "position" (seat) ny mpilalao rehetra
+    this.players.sort((a, b) => a.position - b.position);
+
+    // Averina tadiavina ny index vaovao aorian'ny sort
+    if (currentPlayerId) this.currentPlayerIndex = this.players.findIndex(p => p.id === currentPlayerId);
+    if (dealerId) this.dealerIndex = this.players.findIndex(p => p.id === dealerId);
+    if (sbId) this.sbIndex = this.players.findIndex(p => p.id === sbId);
+    if (bbId) this.bbIndex = this.players.findIndex(p => p.id === bbId);
   }
 
   startTurnTimer() {
@@ -79,6 +96,7 @@ export class Table {
     }
     
     this.players.push(player);
+    this.sortPlayers();
     return player;
   }
 
@@ -104,11 +122,7 @@ export class Table {
     }
 
     this.players.splice(playerIndex, 1);
-    
-    // Ajuster currentPlayerIndex si nécessaire suite à la suppression
-    if (this.gameState === 'playing' && this.currentPlayerIndex >= playerIndex) {
-      this.currentPlayerIndex = Math.max(0, this.currentPlayerIndex - 1);
-    }
+    this.sortPlayers();
 
     if (this.players.length < 2) {
       this.gameState = 'waiting';
@@ -235,7 +249,7 @@ export class Table {
         player.lastAction = 'fold';
         
         // 1v1 logic: Raha 1v1 ary nanao fold, dia ny mpilalao hafa rehetra (non-folded/out) dia lasa winner avy hatrany
-        const nonFolded = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
+        const nonFolded = this.players.filter(p => p.status === 'active' || p.status === 'all-in');
         if (nonFolded.length === 1) {
           this.collectBets();
           this.finishHand(nonFolded[0]);
@@ -325,7 +339,7 @@ export class Table {
 
   moveToNextPlayer() {
     const activePlayers = this.players.filter(p => p.status === 'active');
-    const nonFoldedPlayers = this.players.filter(p => p.status !== 'folded' && p.status !== 'out');
+    const nonFoldedPlayers = this.players.filter(p => p.status === 'active' || p.status === 'all-in');
     const playersWithChips = activePlayers.filter(p => p.chips > 0);
 
     if (nonFoldedPlayers.length === 1) {
