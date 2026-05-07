@@ -19,8 +19,8 @@ export const initSocket = (httpServer, allowedOrigins) => {
     allowEIO3: true,
     transports: ['websocket', 'polling'],
     pingInterval: 30000,
-    pingTimeout: 20000,
-    connectTimeout: 20000
+    pingTimeout: 3600000,
+    connectTimeout: 3600000
   });
 
   io.use((socket, next) => {
@@ -153,30 +153,15 @@ export const initSocket = (httpServer, allowedOrigins) => {
     socket.on('emoji', ({ tableId, emoji }) => {
       io.to(tableId).emit('newEmoji', { playerName: socket.user.name, emoji, timestamp: Date.now() });
     });
+socket.on('disconnect', async () => {
+  onlinePlayers--;
+  io.emit('onlineCount', onlinePlayers);
+  const playerName = socket.user?.name?.trim();
+  if (!playerName) return;
 
-    socket.on('disconnect', async () => {
-      onlinePlayers--;
-      io.emit('onlineCount', onlinePlayers);
-      const playerName = socket.user?.name?.trim();
-      if (!playerName) return;
-
-      const timeoutId = setTimeout(async () => {
-        pendingRemovals.delete(playerName);
-        const tables = tableManager.getAllTables();
-        for (const table of tables) {
-          const player = table.players.find(p => p.id === socket.id);
-          if (player) {
-            const result = table.removePlayer(socket.id);
-            if (result) {
-              await returnChipsToUser(result.name, result.chips);
-              broadcastTableState(table);
-            }
-          }
-        }
-      }, 10000);
-      pendingRemovals.set(playerName, timeoutId);
-    });
-  });
+  console.log(`Joueur déconnecté : ${playerName} (ID: ${socket.id}). Session maintenue à la table.`);
+  // Timer removed: Player is no longer automatically removed from the table.
+});  });
 };
 
 async function returnChipsToUser(playerName, chips) {
