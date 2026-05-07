@@ -103,6 +103,7 @@ export const initSocket = (httpServer, allowedOrigins) => {
             user.Solde.montant = parseFloat(user.Solde.montant) - initialChips;
             await user.Solde.save({ transaction: t });
             existingPlayer.chips += initialChips;
+            existingPlayer.status = 'active'; // Reset status for rebuy
           }
           await t.commit();
           existingPlayer.id = socket.id;
@@ -196,6 +197,34 @@ function broadcastLobbyUpdate() {
   io.emit('lobbyUpdate', tables.map(t => ({ id: t.id, currentPlayers: t.players.length, playerNames: t.players.map(p => p.name) })));
 }
 
+function startRemovalTimer(table, playerName) {
+  if (pendingRemovals.has(playerName)) {
+    clearTimeout(pendingRemovals.get(playerName));
+  }
+  
+  // Find player socket to notify them with a delay
+  const player = table.players.find(p => p.name.trim().toLowerCase() === playerName.toLowerCase());
+  if (player) {
+      setTimeout(() => {
+          io.to(player.id).emit('showRebuyModal');
+      }, 5000); // Attendre 5s pour laisser finir les animations avant d'afficher le modal
+  }
+
+  const timer = setTimeout(async () => {
+    const player = table.players.find(p => p.name.trim().toLowerCase() === playerName.toLowerCase());
+    if (player && player.chips === 0) {
+      console.log(`Auto-suppression du joueur : ${playerName} après 10s sans recave.`);
+      const result = table.removePlayer(player.id);
+      if (result) await returnChipsToUser(result.name, result.chips);
+      broadcastTableState(table);
+      broadcastLobbyUpdate();
+      pendingRemovals.delete(playerName);
+    }
+  }, 10000); // 10 secondes
+
+  pendingRemovals.set(playerName, timer);
+}
+
 function setupTableCallbacks(table) {
   if (!table) return;
   if (!table.onUpdate) table.setUpdateCallback(() => {
@@ -214,6 +243,14 @@ function setupTableCallbacks(table) {
         const now = new Date();
         await RevenuRake.create({ montant: rake, historiqueMainId: historique.id, date: now, month: now.getMonth() + 1, year: now.getFullYear() });
       }
+
+      // Check if any player has 0 chips after hand and start removal timer
+      table.players.forEach(player => {
+          if (player.chips === 0) {
+              startRemovalTimer(table, player.name);
+          }
+      });
     } catch (err) { console.error('Error saving history:', err); }
   });
 }
+
