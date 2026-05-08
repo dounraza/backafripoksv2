@@ -387,17 +387,22 @@ export class Table {
     
     while (contributors.length > 0) {
       const minBet = contributors[0].bet;
-      const potAmount = minBet * contributors.length;
+      const numContributors = contributors.length;
+      const potAmount = minBet * numContributors;
+      const isContested = numContributors > 1;
+
       const eligiblePlayerIds = contributors
         .filter(p => p.status === 'active' || p.status === 'all-in')
         .map(p => p.id);
 
-      // Try to merge with last pot if eligible players are the same
+      // Try to merge with last pot if eligible players are the same AND contested status is the same
       const lastPot = this.pots[this.pots.length - 1];
-      if (lastPot && JSON.stringify(lastPot.eligiblePlayerIds.sort()) === JSON.stringify(eligiblePlayerIds.sort())) {
+      if (lastPot && 
+          JSON.stringify(lastPot.eligiblePlayerIds.sort()) === JSON.stringify(eligiblePlayerIds.sort()) &&
+          lastPot.isContested === isContested) {
         lastPot.amount += potAmount;
       } else {
-        this.pots.push({ amount: potAmount, eligiblePlayerIds });
+        this.pots.push({ amount: potAmount, eligiblePlayerIds, isContested });
       }
 
       contributors.forEach(p => p.bet -= minBet);
@@ -545,10 +550,21 @@ export class Table {
     if (singleWinner) {
       const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
       
-      // Calcul du rake (5%) même si le gagnant remporte le pot par fold
-      const rake = Math.round(totalPot * 0.05);
+      // Calcul du rake (5%) uniquement sur les pots contestés
+      let rakableAmount = 0;
+      let uncalledAmount = 0;
+      
+      this.pots.forEach(pot => {
+        if (pot.isContested) {
+          rakableAmount += pot.amount;
+        } else {
+          uncalledAmount += pot.amount;
+        }
+      });
+
+      const rake = Math.round(rakableAmount * 0.05);
       this.totalRake = this.totalRake + rake;
-      const winAmount = totalPot - rake;
+      const winAmount = (rakableAmount - rake) + uncalledAmount;
       
       singleWinner.chips += winAmount;
       this.winnerInfo = [{
@@ -589,8 +605,14 @@ export class Table {
   getStateForPlayer(playerId) {
     // Calcul du pot total brut
     const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
-    // Calcul du rake estimé (5%)
-    const estimatedRake = Math.round(totalPot * 0.05);
+    
+    // Calcul du rake estimé uniquement sur les pots contestés
+    let rakableAmount = 0;
+    this.pots.forEach(pot => {
+      if (pot.isContested) rakableAmount += pot.amount;
+    });
+
+    const estimatedRake = Math.round(rakableAmount * 0.05);
     const potAfterRake = totalPot - estimatedRake;
 
     const requester = this.players.find(p => p.id === playerId);
