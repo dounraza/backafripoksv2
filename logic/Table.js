@@ -510,10 +510,10 @@ export class Table {
       const winners = eligibleHands.filter(h => HandEvaluator.compare(h.hand, eligibleHands[0].hand) === 0);
       
       // Calcul du rake (5%) sur le pot actuel
-      const potRake = Number((pot.amount * 0.05).toFixed(2));
-      this.totalRake = Number((this.totalRake + potRake).toFixed(2));
-      const amountToDistribute = Number((pot.amount - potRake).toFixed(2));
-      const winAmount = Number((amountToDistribute / winners.length).toFixed(2));
+      const potRake = Math.round(pot.amount * 0.05);
+      this.totalRake = this.totalRake + potRake;
+      const amountToDistribute = pot.amount - potRake;
+      const winAmount = Math.floor(amountToDistribute / winners.length);
 
       winners.forEach(w => {
         const player = this.players.find(p => p.id === w.playerId);
@@ -546,9 +546,9 @@ export class Table {
       const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
       
       // Calcul du rake (5%) même si le gagnant remporte le pot par fold
-      const rake = Number((totalPot * 0.05).toFixed(2));
-      this.totalRake = Number((this.totalRake + rake).toFixed(2));
-      const winAmount = Number((totalPot - rake).toFixed(2));
+      const rake = Math.round(totalPot * 0.05);
+      this.totalRake = this.totalRake + rake;
+      const winAmount = totalPot - rake;
       
       singleWinner.chips += winAmount;
       this.winnerInfo = [{
@@ -590,8 +590,8 @@ export class Table {
     // Calcul du pot total brut
     const totalPot = this.pots.reduce((sum, p) => sum + p.amount, 0);
     // Calcul du rake estimé (5%)
-    const estimatedRake = Number((totalPot * 0.05).toFixed(2));
-    const potAfterRake = Number((totalPot - estimatedRake).toFixed(2));
+    const estimatedRake = Math.round(totalPot * 0.05);
+    const potAfterRake = totalPot - estimatedRake;
 
     const requester = this.players.find(p => p.id === playerId);
     const requesterFolded = requester && (requester.status === 'folded' || requester.status === 'out');
