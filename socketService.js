@@ -239,15 +239,19 @@ function setupTableCallbacks(table) {
       
       const allFolded = players.filter(p => p.status === 'folded').map(p => p.name);
       const allWinners = table.winnerInfo ? table.winnerInfo.map(w => w.name) : [];
+      const isFoldWin = table.winnerInfo && table.winnerInfo.length === 1 && table.winnerInfo[0].handName === "TOUS LES AUTRES ONT FOLDÉ";
       
       const historique = await HistoriqueMain.create({
         table_name: tableName,
         datetime: new Date(),
         cartes_communaute: communityCards.map(c => c.value + c.suit),
-        main_joueurs: players.filter(p => p.status !== 'out').map(p => ({ 
+        main_joueurs: players.filter(p => p.status !== 'out').map(p => {
+          const isWinner = allWinners.includes(p.name);
+          return { 
             pseudo: p.name, 
-            cards: p.cards.map(c => c.value + c.suit)
-        })),
+            cards: (isWinner && isFoldWin) ? [] : p.cards.map(c => c.value + c.suit)
+          };
+        }),
         foldes: allFolded,
         gagnants: allWinners,
         rake: totalRake
