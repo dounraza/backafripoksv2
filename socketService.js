@@ -231,17 +231,30 @@ function setupTableCallbacks(table) {
     broadcastTableState(table);
     if (table.currentPhase === 'pre-flop' && table.gameState === 'waiting') broadcastLobbyUpdate();
   });
-  if (!table.onHandEnd) table.setHandEndCallback(async (playersData, rake) => {
+  if (!table.onHandEnd) table.setHandEndCallback(async (handData) => {
     try {
+      const { players, communityCards, totalRake } = handData;
+      const tableData = await TablePoker.findByPk(table.id);
+      const tableName = tableData ? tableData.name : table.id;
+      
+      const allFolded = players.filter(p => p.status === 'folded').map(p => p.name);
+      const allWinners = table.winnerInfo ? table.winnerInfo.map(w => w.name) : [];
+      
       const historique = await HistoriqueMain.create({
-        table_name: table.id,
-        cartes_communaute: table.communityCards.map(c => c.value + c.suit),
-        main_joueurs: table.players.filter(p => p.status !== 'out').map(p => ({ pseudo: p.name, cards: p.cards.map(c => c.value + c.suit) })),
-        rake: rake
+        table_name: tableName,
+        datetime: new Date(),
+        cartes_communaute: communityCards.map(c => c.value + c.suit),
+        main_joueurs: players.filter(p => p.status !== 'out').map(p => ({ 
+            pseudo: p.name, 
+            cards: p.cards.map(c => c.value + c.suit)
+        })),
+        foldes: allFolded,
+        gagnants: allWinners,
+        rake: totalRake
       });
-      if (rake > 0) {
+      if (totalRake > 0) {
         const now = new Date();
-        await RevenuRake.create({ montant: rake, historiqueMainId: historique.id, date: now, month: now.getMonth() + 1, year: now.getFullYear() });
+        await RevenuRake.create({ montant: totalRake, historiqueMainId: historique.id, date: now, month: now.getMonth() + 1, year: now.getFullYear() });
       }
 
       // Check if any player has 0 chips after hand and start removal timer

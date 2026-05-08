@@ -563,7 +563,15 @@ export class Table {
     this.notify();
 
     if (this.onHandEnd) {
-      this.onHandEnd(this.players.map(p => ({ name: p.name, chips: p.chips })), this.totalRake);
+      this.onHandEnd({
+        players: this.players.map(p => ({ 
+          name: p.name, 
+          cards: p.cards, 
+          status: p.status 
+        })),
+        communityCards: this.communityCards,
+        totalRake: this.totalRake
+      });
     }
 
     setTimeout(() => {

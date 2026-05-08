@@ -32,9 +32,10 @@ export const getHistoriqueByTableId = async (req, res) => {
       return res.status(404).json({ error: 'Table non trouvée' });
     }
 
+    // Utiliser le nom de la table au lieu de l'ID, car c'est ce qu'on sauvegarde dans socketService.js
     const historique = await HistoriqueMain.findAll({
-      where: { table_name: String(tableData.id) }, // Assure-toi que c'est le format stocké
-      order: [['createdAt', 'DESC']],
+      where: { table_name: tableData.name }, 
+      order: [['datetime', 'DESC']],
       limit: 10
     });
     
@@ -49,7 +50,7 @@ export const getHistorique = async (req, res) => {
     const { tableName } = req.params;
     const historique = await HistoriqueMain.findAll({
       where: { table_name: tableName },
-      order: [['createdAt', 'DESC']],
+      order: [['datetime', 'DESC']],
       limit: 10
     });
     res.json(historique);
