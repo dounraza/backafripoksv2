@@ -1,79 +1,74 @@
-import 'dotenv/config';
-import express from 'express';
-import { createServer } from 'http';
-import cors from 'cors';
-import compression from 'compression';
-import { tableManager } from './logic/TableManager.js';
-import sequelize from './config/database.js';
-import { connectDB } from './config/database.js';
-import { initSocket } from './socketService.js';
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const sequelize = require("./backend/config/Db");
+const authRoutes = require("./backend/routes/authRoutes");
+const authAdminRoutes = require("./backend/routes/UserAdminRoutes");
+const soldeRoutes = require("./backend/routes/soldeRoutes");
+const soldeAdminRoutes = require("./backend/routes/soldeAdminRoutes");
+const depotMobileRoutes = require("./backend/routes/DepotModileMoneyRoutes");
+const depotCryptoRoutes = require("./backend/routes/DepotCryptoMoneyRoutes");
+const retraitCrypto = require("./backend/routes/RetraitCryptoRoutes");
+const retraitMobile = require("./backend/routes/RetraitMobileRoutes");
+const typeCrypto = require("./backend/routes/TypeRoutes");
+const tableRoutes = require("./backend/routes/tableRoute"); 
+const EnvoieRoutes = require("./backend/routes/EnvoieRoutes"); 
+const protect = require('./backend/middleware/authMiddleware');
+const { serverSocket } = require("./backend/serverSocket");
+const historiqueRoutes = require("./backend/routes/HistoriqueMainRoutes");
+const userConnectedRoutes = require("./backend/routes/userConnected");
 
-import authRoutes from './routes/auth.js';
-import userRoutes from './routes/userRoutes.js';
-import tableRoutes from './routes/tableRoutes.js';
-import soldeRoutes from './routes/soldeRoutes.js';
 
-// Désactiver les logs verbeux en production
-if (process.env.NODE_ENV === 'production') {
-  console.log = () => {};
-  console.info = () => {};
-}
+require('./backend/model/Envoie');
+require('./backend/model/UserAdmin');
+require('./backend/model/DepotCryptoMoney');
+require('./backend/model/DepotMobileMoney');
+require('./backend/model/RetraitCryptoMoney');
+require('./backend/model/RetraitMobileMoney');
+require('./backend/model/Soldes');
+require('./backend/model/Table');
+require('./backend/model/TypeCryptoMoney');
+require('./backend/model/User');
+sequelize.authenticate()
+  .then(() => {
+    console.log("Connexion à MySQL réussie.");
+    // return sequelize.sync({ force: true });
+  })
+  .catch(err => console.error("Échec de connexion à MySQL :", err));
+
+const corsOptions = {
+  origin: "*"
+};
 
 const app = express();
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "https://frontafripoksv2.vercel.app",
-  "https://frontafripoksv2.vercel.app/"
-];
 
-app.use(cors({
-  origin: '*',
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
-app.use(compression());
-app.use(express.json()); 
-app.use(express.static('public'));
+app.use(cors(corsOptions));
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/tables', tableRoutes);
-app.use('/api/solde', soldeRoutes);
 
-try {
-  await connectDB();
-  await sequelize.sync();
-  console.log('Modèles synchronisés avec la base de données.');
-} catch (error) {
-  console.error('Erreur fatale lors de l\'initialisation de la base de données :', error);
-  process.exit(1);
-}
+app.use(express.json({ extended: false }));
 
-const httpServer = createServer(app);
+app.use("/api/auth", authRoutes);
+app.use("/api/auth/admin", authAdminRoutes);
+app.use("/api", soldeRoutes);
+app.use("/api/tables", tableRoutes);
+app.use("/api", protect, soldeAdminRoutes);
+app.use("/api/depot", protect, depotMobileRoutes);
+app.use("/api/depot", protect, depotCryptoRoutes);
+app.use("/api", protect, typeCrypto);
+app.use("/api/retrait", protect, retraitMobile);
+app.use("/api/retrait", protect, retraitCrypto);
+app.use("/api", protect, EnvoieRoutes);
+app.use("/api/historique", protect, historiqueRoutes);
+app.use("/api/userConnected", userConnectedRoutes);
 
-// Initialize WebSocket Service
-initSocket(httpServer, allowedOrigins);
+const httpServer = serverSocket(app);   
 
-const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Serveur Poker lancé sur le port ${PORT}`);
-});
-
+const port = process.env.PORT || 5000;
 httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`Le port ${PORT} est déjà utilisé.`);
+    console.error(`Port ${port} is already in use.`);
   } else {
-    console.error('Erreur du serveur HTTP:', err);
+    console.error('Server error:', err);
   }
-  process.exit(1);
 });
-
-process.on('uncaughtException', (err) => {
-  console.error('Exception non capturée:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Promesse non gérée:', reason);
-});
+httpServer.listen(port, () => console.log(`Server is running on the port ${port}`));
