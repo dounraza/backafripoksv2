@@ -331,6 +331,35 @@ const serverSocket = (app) => {
             }
         });
 
+        socket.on('recave', async ({ tableId, userId }) => {
+            console.log('[RECAVE] Recave request from', userId, 'for table', tableId);
+            try {
+                const found = findPlayerInAllTables(userId, tableId);
+                if (!found) return socket.emit('playerActionError', { message: 'Joueur non trouvé à la table.' });
+                
+                const { table, player } = found;
+                const solde = await Soldes.findOne({ where: { userId } });
+                
+                if (!solde || solde.montant < 500) { // Exemple : 500 est le montant de la recave
+                    return socket.emit('playerActionError', { message: 'Solde insuffisant pour la recave.' });
+                }
+                
+                const recaveAmount = 500;
+                solde.montant -= recaveAmount;
+                await solde.save();
+                
+                player.stack += recaveAmount;
+                // Mettre à jour dans la table poker-ts
+                table.table.sitDown(player.seatIndex, player.stack);
+                
+                table.broadcastState();
+                socket.emit('recaveSuccess', { newStack: player.stack });
+            } catch (err) {
+                console.error('[RECAVE] ERR', err);
+                socket.emit('playerActionError', { message: 'Erreur lors de la recave.' });
+            }
+        });
+
         socket.on("playerAction", async ({tableId, tableSessionId, playerSeats, action, bet}) => {
             console.log('# Player action');
             try {
