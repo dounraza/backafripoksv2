@@ -20,12 +20,19 @@ exports.getLastHistoriqueByTable = asyncHandler(async (req, res) => {
         const { tableName } = req.params;
         
         if (!tableName) {
-            return res.status(400).json({ message: "Le nom de la table est requis." });
+            return res.status(400).json({ message: "Le nom ou l'ID de la table est requis." });
+        }
+
+        // 1. Try to find table by ID first to get its name
+        let nameToQuery = tableName;
+        const table = await require("../model/Table").findByPk(tableName);
+        if (table) {
+            nameToQuery = table.name;
         }
         
         const historique = await HistoriqueMain.findOne({
             where: {
-                table_name: tableName
+                table_name: nameToQuery
             },
             order: [['datetime', 'DESC']]
         });

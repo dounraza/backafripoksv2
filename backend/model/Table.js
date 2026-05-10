@@ -26,6 +26,8 @@ const Table = sequelize.define('Table', {
 }, {
   tableName: 'tablepoker',
   timestamps: false,
+  createdAt: false,
+  updatedAt: false,
 });
 
 module.exports = Table;
