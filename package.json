@@ -10,7 +10,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
     "dev": "nodemon index.js",
-     "build": "vite build"
+    "build": "vite build"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -25,6 +25,7 @@
     "poker-ts": "^1.4.1",
     "pokersolver": "^2.1.4",
     "sequelize": "^6.37.7",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "vite": "^8.0.11"
   }
 }

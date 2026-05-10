@@ -116,7 +116,11 @@ function findPlayerInAllTables(userId, tableId) {
 const serverSocket = (app) => {
     const httpServer = http.createServer(app);
     const socketServer = socketIo(httpServer, {
-        cors: { origin: "*" }
+        cors: {
+            origin: ["https://frontafripoksv2.vercel.app", "http://localhost:5173"],
+            methods: ["GET", "POST"],
+            credentials: true
+        }
     });
     // socketServer.use(authenticateSocket);
     
