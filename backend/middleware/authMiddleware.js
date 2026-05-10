@@ -5,7 +5,6 @@ const asyncHandler = require("express-async-handler");
 const protect = asyncHandler(async (req, res, next) => {
     
     let token;
-    console.log("🔍 Incoming Request Headers Authorization:", req.headers.authorization);
 
     if(req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
@@ -18,14 +17,13 @@ const protect = asyncHandler(async (req, res, next) => {
               });
             return next();
         } catch(err) {
-            console.log("Auth Middleware Error:", err);
+            console.log(err);
             res.status(401);
             throw new Error("Not autorized, token failed");
         }
     }
 
     if(!token) {
-        console.log("No Token found in Authorization header");
         res.status(401);
         throw new Error("Not autorized");
     }

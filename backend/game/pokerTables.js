@@ -802,7 +802,7 @@ class PokerTable {
         setTimeout(async () => {
             const decision = agent.decideAction(this);
             await this.playerAction(null, seatIndex, decision.action, decision.bet, disconnectedPlayers);
-            await this.broadcastState();
+            this.broadcastState();
         }, 2000);
     }
 
@@ -837,7 +837,6 @@ class PokerTable {
             if(this.table.isBettingRoundInProgress()) {
                 toAct = this.table.playerToAct();
             } else if (this.table.areBettingRoundsCompleted()) {
-                // Keep this as is - it's already an async call site that awaits endGame
                 return this.endGame();
             }
         }
@@ -845,15 +844,10 @@ class PokerTable {
         const step = handInProgress ? this.table.roundOfBetting() : null;
         const playerNames = Array(this.maxSeats).fill(null);
         const playerIds = Array(this.maxSeats).fill(null);
-        const currentAvatars = Array(this.maxSeats).fill(null);
-        
         for (const player of this.players.values()) {
             if (player.seatIndex !== undefined) {
-                // Use the player's stored info directly to avoid async fetching here.
-                // Profile updates should trigger a separate event to update the player object.
                 playerNames[player.seatIndex] = player.user.name;
                 playerIds[player.seatIndex] = player.user.id;
-                currentAvatars[player.seatIndex] = player.user.avatar_url || '/avatars/0.png';
             }
         }
 
@@ -877,7 +871,7 @@ class PokerTable {
                     playerCards: this.holeCards[seatIndex],
                     legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
                     pots,
-                    avatars: currentAvatars,
+                    avatars: this.avatars,
                 };
                 player.send('tableState', data);
                 if(isStart && toAct !== null && toAct !== undefined) this.startAutoFoldTimer(toAct);
