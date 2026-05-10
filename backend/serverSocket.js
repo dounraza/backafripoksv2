@@ -117,7 +117,7 @@ const serverSocket = (app) => {
     const httpServer = http.createServer(app);
     const socketServer = socketIo(httpServer, {
         cors: {
-            origin: ["https://frontafripoksv2.vercel.app", "http://localhost:5173"],
+            origin: ["https://frontafripoksv2.vercel.app", "http://localhost:5173", "http://localhost:5174"],
             methods: ["GET", "POST"],
             credentials: true
         }
