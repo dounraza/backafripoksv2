@@ -1,12 +1,11 @@
 const multer = require("multer");
 const path = require("path");
+const os = require("os");
 
-// Configure storage for avatars
+// Configure storage for avatars in the system's temporary directory
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // Correct path: E:\v2\frontafripoksv2\public\avatars
-        // We are in E:\v2\backafripoksv2\backend, so we need to go up two levels to E:\v2, then into frontafripoksv2\public\avatars
-        cb(null, path.join(__dirname, "../../../frontafripoksv2/public/avatars"));
+        cb(null, os.tmpdir());
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
