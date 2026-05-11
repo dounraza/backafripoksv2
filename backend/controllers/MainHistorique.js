@@ -31,7 +31,7 @@ exports.getLastHistoriqueByTable = asyncHandler(async (req, res) => {
         });
         
         if (!historique) {
-            return res.status(404).json({ message: "Aucun historique trouvé pour cette table." });
+            return res.json(null);
         }
         
         // Extraire tous les noms des joueurs
