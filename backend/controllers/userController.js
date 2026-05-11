@@ -1,6 +1,39 @@
+const fs = require('fs');
+const path = require('path');
 const User = require("../model/User");
 const asyncHandler = require("express-async-handler");
 const generateToken = require('../config/generateToken');
+
+exports.uploadAvatar = asyncHandler(async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Aucun fichier téléchargé' });
+    }
+
+    const userId = req.user.id;
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    }
+
+    // Supprimer l'ancien avatar s'il existe
+    if (user.avatar_url && user.avatar_url.startsWith('/uploads/avatars/')) {
+        const oldFilename = user.avatar_url.split('/').pop();
+        const oldPath = path.resolve(__dirname, '..', 'public', 'avatars', oldFilename);
+        if (fs.existsSync(oldPath)) {
+            fs.unlinkSync(oldPath);
+        }
+    }
+
+    user.avatar_url = `/uploads/avatars/${req.file.filename}`;
+    await user.save();
+
+    res.json({
+        success: true,
+        message: 'Avatar mis à jour',
+        avatar_url: user.avatar_url
+    });
+});
 
 exports.authUser = asyncHandler(async (req, res)=> {
     const {email, password} = req.body;
@@ -8,10 +41,12 @@ exports.authUser = asyncHandler(async (req, res)=> {
     const user = await User.findOne({ where: { email }});
 
     if(user && (await user.validPassword(password))) {
+        console.log('Login successful for:', user.name, 'Avatar URL:', user.avatar_url);
         res.json({
             id: user.id,
             name: user.name,
             email: user.email,
+            avatar_url: user.avatar_url,
             accessToken: generateToken(user.id, '1d')
         });     
     } else {

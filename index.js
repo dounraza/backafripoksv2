@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 const sequelize = require("./backend/config/Db");
 const authRoutes = require("./backend/routes/authRoutes");
 const authAdminRoutes = require("./backend/routes/UserAdminRoutes");
@@ -44,6 +45,7 @@ const corsOptions = {
 const app = express();
 
 app.use(cors(corsOptions));
+app.use('/uploads/avatars', express.static(path.join(__dirname, 'backend', 'public', 'avatars')));
 
 
 app.use(express.json({ extended: false }));

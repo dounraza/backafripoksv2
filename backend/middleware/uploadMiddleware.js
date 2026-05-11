@@ -1,15 +1,19 @@
 const multer = require("multer");
 const path = require("path");
-const os = require("os");
+const fs = require("fs");
 
-// Configure storage for avatars in the system's temporary directory
+// Configure storage for avatars in the public/avatars directory
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, os.tmpdir());
+        const dir = path.resolve(__dirname, '..', 'public', 'avatars');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        cb(null, dir);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        cb(null, 'avatar-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
     }
 });
 
