@@ -17,6 +17,7 @@ const protect = require('./backend/middleware/authMiddleware');
 const { serverSocket } = require("./backend/serverSocket");
 const historiqueRoutes = require("./backend/routes/HistoriqueMainRoutes");
 const userConnectedRoutes = require("./backend/routes/userConnected");
+const userRoutes = require("./backend/routes/userRoutes");
 
 
 require('./backend/model/Envoie');
@@ -60,6 +61,7 @@ app.use("/api/retrait", protect, retraitCrypto);
 app.use("/api", protect, EnvoieRoutes);
 app.use("/api/historique", protect, historiqueRoutes);
 app.use("/api/userConnected", userConnectedRoutes);
+app.use("/api/users", userRoutes);
 
 const httpServer = serverSocket(app);   
 

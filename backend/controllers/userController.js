@@ -70,3 +70,41 @@ exports.findByPseudo = asyncHandler(async (req, res)=> {
         res.status(404).json({ message: 'Utilisateur non trouvé' });
     }
 })
+
+exports.updateUser = asyncHandler(async (req, res) => {
+    const { name, avatar_url } = req.body;
+    const { userId } = req.params;
+
+    // Vérification que l'utilisateur connecté modifie bien son propre profil
+    if (parseInt(req.user.id) !== parseInt(userId)) {
+        return res.status(403).json({ success: false, message: 'Non autorisé à modifier ce profil' });
+    }
+
+    const user = await User.findByPk(userId);
+
+    if (user) {
+        if (name) {
+            const nameExists = await User.findOne({ where: { name } });
+            if (nameExists && nameExists.id !== user.id) {
+                return res.status(400).json({ success: false, message: 'Ce pseudo est déjà utilisé' });
+            }
+            user.name = name;
+        }
+        if (avatar_url !== undefined) {
+            user.avatar_url = avatar_url;
+        }
+
+        await user.save();
+        res.json({
+            success: true,
+            message: 'Profil mis à jour',
+            user: {
+                id: user.id,
+                name: user.name,
+                avatar_url: user.avatar_url
+            }
+        });
+    } else {
+        res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    }
+});
