@@ -15,7 +15,6 @@ exports.retrait = asyncHandler(async (req, res) => {
 
   // Trouver le solde de l'utilisateur
   const solde = await Soldes.findOne({ where: { userId: user.id } });
-  console.log(montant);
   
   if (!solde || Number(solde.montant) < Number(montant)) {
     return res.status(400).json({ message: "Solde insuffisant" });

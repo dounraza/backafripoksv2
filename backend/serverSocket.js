@@ -85,9 +85,7 @@ async function createNewTable(tableId) {
 }
 
 function findPlayerInAllTables(userId, tableId) {
-    console.log('[FIND IN ALL TABLE] table id', tableId);
     const sessionMap = pokerTables.get(tableId);
-    console.log('[FIND IN ALL TABLE] session map', sessionMap);
     if (!sessionMap) return null;
     
     for (const [tableSessionId, table] of sessionMap.entries()) {
