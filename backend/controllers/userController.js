@@ -4,6 +4,20 @@ const User = require("../model/User");
 const asyncHandler = require("express-async-handler");
 const generateToken = require('../config/generateToken');
 
+exports.getAvatar = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    }
+
+    res.json({
+        success: true,
+        avatar_url: user.avatar_url || null
+    });
+});
+
 exports.uploadAvatar = asyncHandler(async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ success: false, message: 'Aucun fichier téléchargé' });
