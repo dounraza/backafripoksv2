@@ -252,7 +252,6 @@ const serverSocket = (app) => {
                     return;
                 }
 
-                console.log('[JOIN TABLE] player not found in table');
                 let table = findTable(tableId);
                 if (!table) { 
                     table = await createNewTable(tableId);

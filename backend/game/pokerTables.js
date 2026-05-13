@@ -711,7 +711,9 @@ class PokerTable {
             playerTables = playerTables.filter(table => Number(table) !== Number(this.tableInfo.id));
             playerTablesMap.set(player.user.id, playerTables);
            
-            this.table.standUp(seatIndex);
+            if (this.seatTaken.has(seatIndex)) {
+                this.table.standUp(seatIndex);
+            }
             this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
             playerCavesMap.delete(player.user.id);
             return true;
