@@ -137,7 +137,7 @@ exports.updateUser = asyncHandler(async (req, res) => {
             if (nameExists && nameExists.id !== user.id) {
                 return res.status(400).json({ success: false, message: 'Ce pseudo est déjà utilisé' });
             }
-            user.name = name;
+           // user.name = name;
         }
         if (avatar_url !== undefined) {
             user.avatar_url = avatar_url;
