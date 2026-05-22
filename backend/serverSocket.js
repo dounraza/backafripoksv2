@@ -324,7 +324,7 @@ const serverSocket = (app) => {
             } finally {
              //   tableLocks.set(tableId, false);
                 lockPromises.delete(tableId); // supprime le lock
-                release();                    // débloque le prochain en attente
+                if (typeof release === 'function') release(); // débloque le prochain en attente
             }
         });
 
@@ -341,6 +341,20 @@ const serverSocket = (app) => {
             } catch (err) {
                 console.error('player action error', err);
                 socket.emit('playerActionError', { message: err.message || 'Une erreur est survenue lors de l\'action du joueur.' });
+            }
+        });
+
+        socket.on("recave", async ({ tableId, tableSessionId, amount }) => {
+            try {
+                const pokerTable = pokerTables.get(tableId)?.get(tableSessionId);
+                if (pokerTable) {
+                    const userId = connectedUsers.get(socket.id)?.userId;
+                    if (userId) {
+                        await pokerTable.recave(userId, amount);
+                    }
+                }
+            } catch (err) {
+                console.error('recave error', err);
             }
         });
 

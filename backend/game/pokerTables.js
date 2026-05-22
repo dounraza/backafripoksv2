@@ -46,6 +46,57 @@ class PokerTable {
         this.avatars = [];
 
         this.disconnectTimers = new Map(); // Map to hold disconnect timers for each player (userId -> timeoutId)
+        this.waitingForRecave = new Set(); // Set of userIds waiting for re-buy
+        this.recaveTimers = new Map();     // Map to hold recave timers (userId -> timeoutId)
+    }
+
+    async recave(userId, amount) {
+        try {
+            const player = Array.from(this.players.values()).find(p => p.user.id === userId);
+            if (!player) return false;
+
+            const solde = await Soldes.findOne({ where: { userId } });
+            if (!solde || Number(solde.montant) < amount) return false;
+
+            // Clear recave timer
+            if (this.recaveTimers.has(userId)) {
+                clearTimeout(this.recaveTimers.get(userId));
+                this.recaveTimers.delete(userId);
+            }
+
+            // Update chips and DB
+            player.chips = amount;
+            this.caves.set(userId, amount);
+            
+            let playerCavesVal = playerCavesMap.get(userId) || [];
+            let caveObj = playerCavesVal.find(cave => cave.tableId === this.tableInfo.id);
+            if (caveObj) {
+                caveObj.cave = amount;
+            } else {
+                playerCavesVal.push({ tableId: this.tableInfo.id, cave: amount });
+            }
+            playerCavesMap.set(userId, playerCavesVal);
+
+            this.table.sitDown(player.seatIndex, amount);
+            this.waitingForRecave.delete(userId);
+
+            this.broadcastState();
+
+            if (this.waitingForRecave.size === 0 && !this.table.isHandInProgress() && !this.isShowDownInProgress) {
+                setTimeout(async () => {
+                    if (this.waitingForRecave.size === 0 && this.seatTaken.size >= 2) {
+                        this.shareCards();
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                        this.startGame();
+                        this.broadcastState();
+                    }
+                }, 2000);
+            }
+            return true;
+        } catch (err) {
+            console.error('[RECAVE] Error', err);
+            return false;
+        }
     }
 
     handleDisconnect(userId, socketId) {
@@ -197,6 +248,12 @@ class PokerTable {
                 }
                     
                 pokerTable.broadcastWin(result);
+                
+                // Privacy: Hide all cards after win broadcast
+                pokerTable.holeCards = Array(this.maxSeats).fill([]);
+                pokerTable.holeCardsToShow = Array(this.maxSeats).fill([]);
+                pokerTable.omahaCommunityCards = null;
+                
                 pokerTable.broadcastState();
     
                 pokerTable.foldedPlayers = new Set();
@@ -225,6 +282,11 @@ class PokerTable {
     
                 setTimeout(async () => {
                     try {
+                        pokerTable.isShowDownInProgress = false;
+                        if (this.waitingForRecave.size > 0) {
+                            this.broadcastState();
+                            return;
+                        }
                         function sleep(ms) {
                             return new Promise(resolve => setTimeout(resolve, ms));
                         }
@@ -233,7 +295,6 @@ class PokerTable {
                         pokerTable.startGame();   
                     } catch (err) { }
                     pokerTable.broadcastState();
-                    pokerTable.isShowDownInProgress = false;
                 }, 15000);
             }else {
                 pokerTable.broadcastState(true);
@@ -490,7 +551,35 @@ class PokerTable {
                     if(stack && stack > 0) {
                         this.table.sitDown(player.seatIndex, stack);
                     } else {
-                        this.removedPlayers.set(player.seatIndex, player);
+                        if (player.isAgent) {
+                            this.removedPlayers.set(player.seatIndex, player);
+                        } else {
+                            const userId = player.user.id;
+                            this.waitingForRecave.add(userId);
+                            
+                            // Auto-kick after 15 seconds if no recave
+                            if (!this.recaveTimers.has(userId)) {
+                                const timeoutId = setTimeout(async () => {
+                                    console.log(`[AUTOKICK] Player ${userId} timed out for recave`);
+                                    this.recaveTimers.delete(userId);
+                                    this.waitingForRecave.delete(userId);
+                                    
+                                    // Notify player and remove
+                                    player.send('quitsuccess', {});
+                                    await this.removePlayer(player.socketio.id);
+                                    this.broadcastState();
+
+                                    // If no one else waiting, try restart
+                                    if (this.waitingForRecave.size === 0 && this.seatTaken.size >= 2 && !this.table.isHandInProgress()) {
+                                        this.shareCards();
+                                        await new Promise(r => setTimeout(r, 5000));
+                                        this.startGame();
+                                        this.broadcastState();
+                                    }
+                                }, 45000);
+                                this.recaveTimers.set(userId, timeoutId);
+                            }
+                        }
                     }
                 } catch (err) {
                     console.error('[REPLACE PLAYER] ERR seat', player.seatIndex, err);
@@ -703,10 +792,22 @@ class PokerTable {
         try {
             const player = this.players.get(socketId);
             if (!player) return false;
+            
+            // Cleanup cards when player leaves
+            this.holeCards = Array(this.maxSeats).fill(null);
+            this.holeCardsToShow = Array(this.maxSeats).fill(null);
+            this.omahaCommunityCards = null;
+
             const seatIndex = player.seatIndex;
             this.seatTaken.delete(seatIndex);
             this.players.delete(socketId);
             
+            this.waitingForRecave.delete(player.user.id);
+            if (this.recaveTimers.has(player.user.id)) {
+                clearTimeout(this.recaveTimers.get(player.user.id));
+                this.recaveTimers.delete(player.user.id);
+            }
+
             let playerTables = playerTablesMap.get(player.user.id) ?? [];
             playerTables = playerTables.filter(table => Number(table) !== Number(this.tableInfo.id));
             playerTablesMap.set(player.user.id, playerTables);
@@ -716,6 +817,10 @@ class PokerTable {
             }
             this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
             playerCavesMap.delete(player.user.id);
+
+            // Broadcast after cleanup
+            this.broadcastState();
+
             return true;
         }catch (err) {
             console.error('[REMOVE PLAYER] ERR', err);
@@ -874,6 +979,8 @@ class PokerTable {
                     legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
                     pots,
                     avatars: this.avatars,
+                    waitingForRecave: Array.from(this.waitingForRecave),
+                    minCave: this.tableInfo.cave
                 };
                 player.send('tableState', data);
                 if(isStart && toAct !== null && toAct !== undefined) this.startAutoFoldTimer(toAct);

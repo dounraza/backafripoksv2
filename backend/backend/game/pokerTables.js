@@ -5,22 +5,25 @@ const pokerHandSolver = require('pokersolver').Hand;
 const disconnectedPlayers = require('../data/SharedData');
 const utilCompletion = require('../data/UtilsPokerTable');
 const HistoriqueMain = require('../model/HistoriqueMain');
+const Table = require("../model/Table");
 const playerTablesMap = require('./playerTables');
 const playerCavesMap = require('./playerCaves');
 const idlePlayersMap = require('./idlePlayers');
+const { solveOmahaHand } = require('./omahaLogic');
+const OmahaAgent = require('./omahaAgent');
 
 class PokerTable {
     constructor(tableInfo) {
         this.players = new Map();
         this.seatTaken = new Set();
         this.maxSeats = 9;
-        this.seatTaken = new Set();
         this.table = new Poker.Table({
             ante: 0,
             smallBlind: tableInfo.smallBlind,
             bigBlind: tableInfo.bigBlind
         });    
         this.tableInfo = tableInfo;
+        this.gameType = tableInfo.gameType || 'holdem';
         this.id = crypto.randomUUID();
         this.currentRoundActions = [];
         this.foldedPlayers = new Set();
@@ -29,6 +32,7 @@ class PokerTable {
         this.autoFoldTimeout = null;
         this.holeCards = [];
         this.holeCardsToShow = [];
+        this.omahaCommunityCards = null; // Store pre-dealt community cards for Omaha
         this.manualPots = [];
         this.roundIndex = 0;
         this.playerInHandInitial = new Set();
@@ -42,29 +46,70 @@ class PokerTable {
         this.avatars = [];
 
         this.disconnectTimers = new Map(); // Map to hold disconnect timers for each player (userId -> timeoutId)
+        this.waitingForRecave = new Set(); // Set of userIds waiting for re-buy
+        this.recaveTimers = new Map();     // Map to hold recave timers (userId -> timeoutId)
+    }
+
+    async recave(userId, amount) {
+        try {
+            const player = Array.from(this.players.values()).find(p => p.user.id === userId);
+            if (!player) return false;
+
+            const solde = await Soldes.findOne({ where: { userId } });
+            if (!solde || Number(solde.montant) < amount) return false;
+
+            // Clear recave timer
+            if (this.recaveTimers.has(userId)) {
+                clearTimeout(this.recaveTimers.get(userId));
+                this.recaveTimers.delete(userId);
+            }
+
+            // Update chips and DB
+            player.chips = amount;
+            this.caves.set(userId, amount);
+            
+            let playerCavesVal = playerCavesMap.get(userId) || [];
+            let caveObj = playerCavesVal.find(cave => cave.tableId === this.tableInfo.id);
+            if (caveObj) {
+                caveObj.cave = amount;
+            } else {
+                playerCavesVal.push({ tableId: this.tableInfo.id, cave: amount });
+            }
+            playerCavesMap.set(userId, playerCavesVal);
+
+            this.table.sitDown(player.seatIndex, amount);
+            this.waitingForRecave.delete(userId);
+
+            this.broadcastState();
+
+            if (this.waitingForRecave.size === 0 && !this.table.isHandInProgress() && !this.isShowDownInProgress) {
+                setTimeout(async () => {
+                    if (this.waitingForRecave.size === 0 && this.seatTaken.size >= 2) {
+                        this.shareCards();
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                        this.startGame();
+                        this.broadcastState();
+                    }
+                }, 2000);
+            }
+            return true;
+        } catch (err) {
+            console.error('[RECAVE] Error', err);
+            return false;
+        }
     }
 
     handleDisconnect(userId, socketId) {
         try {
-            // console.log('[DISCONNECT] handleDisconnect()', userId);
-            // if timers already exist, do nothing
             if (this.disconnectTimers.has(Number(userId))) return;
-
-            // console.log('[DISCONNECT] Starting timer for user:', userId);
-            
             const player = this.players.get(socketId);
-            // console.log('[DISCONNECT] Player found:', player.user.id, player.seatIndex);
-            // Start a 30-minute timer
             const timeoutId = setTimeout(async () => {
-                // add player to idle players
                 const idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
                 if (!idlePlayers.find(id => id !== player.user.id)) {
                     idlePlayers.push(player.user.id);
                 }
-                // // console.log('[DISCONNECT] Idle players:', idlePlayers);
                 idlePlayersMap.set(this.tableInfo.id, idlePlayers);
             }, 30 * 60 * 1000); // 30 minutes
-    
             this.disconnectTimers.set(userId, timeoutId);
         } catch (err) {
             console.error('[DISCONNECT] Error handling disconnect for user:', userId, err);
@@ -72,8 +117,6 @@ class PokerTable {
     }
 
     handleReconnect(userId) {
-        // // console.log('[RECONNECT] handleReconnect()', userId);
-        // If a timer exists, clear it
         const timeoutId = this.disconnectTimers.get(userId);
         if (timeoutId) {
             clearTimeout(timeoutId);
@@ -81,7 +124,6 @@ class PokerTable {
             let idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
             idlePlayers = idlePlayers.filter(id => id !== userId);
             idlePlayersMap.set(this.tableInfo.id, idlePlayers);
-            // // console.log('[RECONNECT] Timer cleared for user:', userId);
         }
     }
     
@@ -94,7 +136,16 @@ class PokerTable {
             
             if (table.areBettingRoundsCompleted()) {
                 const preShowdownStacks = table.seats().map(seat => seat?.stack ?? 0);
-                const comms = table.communityCards().map(c => `${c.rank}${c.suit[0]}`);
+                let comms = table.communityCards().map(c => `${c.rank}${c.suit[0]}`);
+                
+                // For Omaha, use the pre-dealt cards to ensure no duplicates
+                if (this.gameType === 'omaha' && this.omahaCommunityCards) {
+                    if (pokerTable.countActivePlayers() > 1) {
+                        comms = this.omahaCommunityCards;
+                    } else {
+                        comms = this.omahaCommunityCards.slice(0, comms.length);
+                    }
+                }
     
                 if(pokerTable.countActivePlayers() > 1 && comms.length < 5) {
                     completeCard = true;
@@ -107,9 +158,30 @@ class PokerTable {
                     if (hole == null|| hole.length === 0) return null;
                     if(pokerTable.foldedPlayers.has(index)) return null;
     
-                    const fullCards = [...hole, ...communityCard];
-                    const hand = pokerHandSolver.solve(fullCards);
-                    hand.playerIndex = index;
+                    let hand;
+                    if (pokerTable.gameType === 'omaha') {
+                        // console.log("[DEBUG] Omaha hand evaluation:", { hole, communityCard });
+                        hand = solveOmahaHand(hole, communityCard);
+                        if (!hand && pokerTable.countActivePlayers() === 1) {
+                            hand = {
+                                playerIndex: index,
+                                descr: 'win',
+                                rank: 0,
+                                // Add placeholder methods to prevent TypeErrors
+                                qualifiesHigh: () => true,
+                                loseTo: () => false, // Assuming it should not lose if it's the only hand
+                                compare: (otherHand) => {
+                                    if (this.rank === otherHand.rank) return 0;
+                                    return this.rank > otherHand.rank ? 1 : -1;
+                                }
+                            };
+                        }
+                    } else {
+                        const fullCards = [...hole, ...communityCard];
+                        hand = pokerHandSolver.solve(fullCards);
+                    }
+                    
+                    if (hand) hand.playerIndex = index;
                     return hand;
                 }).filter(h => h !== null);
     
@@ -146,23 +218,11 @@ class PokerTable {
                 for (const player of this.players.values()) {
                     if (player.seatIndex !== undefined) {
                         playerNames[player.seatIndex] = player.user.name;
-                        
                         const solde = await Soldes.findOne({ where: { userId: player.user.id } });
-                        const amount = solde.montant;
                         const cave = this.caves.get(player.user.id);
                         const stack = updatedStacks[player.seatIndex];
-                        const newSolde = Number(amount) - Number(cave) + Number(stack);
-                        
-                        // // console.log('User', player.user.id);
-                        // // console.log('Solde', amount);
-                        // // console.log('Cave', cave);
-                        // // console.log('Stack', stack);
-                        // // console.log('New Solde', newSolde);
-                        
-                        solde.montant = newSolde;
-                        
+                        solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
                         await solde.save();
-                        
                         this.caves.set(player.user.id, stack);
                     }
                 }
@@ -177,7 +237,6 @@ class PokerTable {
                         foldes: data.foldes,
                         gagnants: data.gagnants
                     });
-                    // // console.log("✅ Historique sauvegardé !");
                 } catch (error) {
                     console.error("❌ Erreur lors de l’enregistrement de l’historique :", error);
                 }
@@ -191,32 +250,6 @@ class PokerTable {
                 pokerTable.broadcastWin(result);
                 pokerTable.broadcastState();
     
-                const disconnectedPlayersSession = disconnectedPlayers.get(tableSessionId);
-                if (disconnectedPlayersSession) {
-                    for (const [disconnectedUserId, player] of disconnectedPlayersSession.entries()) {
-                        try {
-                            const stack = table.seats()[player.seatIndex]?.stack ?? 0;
-                            const userId = player.user.id;
-                            const solde = await Soldes.findOne({ where: { userId } });
-                            if (stack > 0 && (!player.quiteDate || Date.now() >= player.quiteDate.getTime())) {
-                                console.warn('[END GAME] solde updated anormally');
-                              //  const newSoldeAmount = Number(solde.montant) + Number(stack);
-                             //   await Soldes.update({ montant: Number(newSoldeAmount) }, { where: { userId } });
-                                console.warn('[END GAME] anyone exit table anormally');
-                               // await pokerTable.removePlayer(player.socketio.id);
-                                
-                            }
-    
-                        } catch (ignored) {
-                            // // console.log("erreur lors de rajout de solde");
-                        }
-                    }
-                    pokerTable.broadcastState();
-                    if (disconnectedPlayersSession.size === 0) {
-                        disconnectedPlayers.delete(tableSessionId);
-                    }
-                }
-    
                 pokerTable.foldedPlayers = new Set();
                 
                 for(const player of pokerTable.removedPlayers.values()) {
@@ -225,19 +258,16 @@ class PokerTable {
 
                 for (const player of this.players.values()) {
                     if (idlePlayersMap.get(this.tableInfo.id)?.find(id => id === player.user.id)) {
-                        // // console.log('[END GAME] Remove idle player :', player.user.id, player.seatIndex);
                         this.removePlayer(player.socketio.id);
                     }
                 }
                 
                 setTimeout(() => {
                     for(const player of pokerTable.removedPlayers.values()) {
-                        // // console.log('[END GAME] Player removed:', player.user.id, player.seatIndex);
                         player.send("quitsuccess", {});
                     }
                     for (const player of this.players.values()) {
                         if (idlePlayersMap.get(this.tableInfo.id)?.find(id => id === player.user.id)) {
-                            // // console.log('[END GAME] emit quitsuccess for :', player.user.id, player.seatIndex);
                             player.send('quitsuccess', {});
                         }
                     }
@@ -246,6 +276,11 @@ class PokerTable {
     
                 setTimeout(async () => {
                     try {
+                        pokerTable.isShowDownInProgress = false;
+                        if (this.waitingForRecave.size > 0) {
+                            this.broadcastState();
+                            return;
+                        }
                         function sleep(ms) {
                             return new Promise(resolve => setTimeout(resolve, ms));
                         }
@@ -254,7 +289,6 @@ class PokerTable {
                         pokerTable.startGame();   
                     } catch (err) { }
                     pokerTable.broadcastState();
-                    pokerTable.isShowDownInProgress = false;
                 }, 15000);
             }else {
                 pokerTable.broadcastState(true);
@@ -262,7 +296,6 @@ class PokerTable {
         } catch (error) {
           console.error('Error', error);
         }
-        
     }
 
     shareCards() {
@@ -282,14 +315,12 @@ class PokerTable {
             const eligibleIndexes = pot.eligiblePlayers;
             const activeHandsOfPot = activeHands.filter(hand => eligibleIndexes.includes(hand.playerIndex));
             const potWinners = pokerHandSolver.winners(activeHandsOfPot); 
-
             const winnerIndexes = potWinners.map(w => w.playerIndex);
 
             if (winnerIndexes.length === 0 || pot.size == 0) continue;
 
             if(pot.eligiblePlayers.length > 1) {
                 for (const winner of potWinners) {  
-                            
                     detailedWinners.push({
                         playerIndex: winner.playerIndex,
                         descr: winner.descr
@@ -300,14 +331,12 @@ class PokerTable {
             const rakeSize = pot.isRakeable ? 0.05 : 0 
             const rake = Math.floor(pot.size * rakeSize);
             const netPot = pot.size - rake;
-
             const amountPerReceiver = Math.floor(netPot / winnerIndexes.length);
             const remainder = netPot % winnerIndexes.length;
 
             for (const index of winnerIndexes) {
                 updatedStacks[index] += amountPerReceiver;
             }
-
             if (remainder > 0) {
                 updatedStacks[winnerIndexes[0]] += remainder;
             }
@@ -315,7 +344,6 @@ class PokerTable {
             if (orphanPots > 0 && mainWinners.length > 0) {
                 const share = Math.floor(orphanPots / mainWinners.length);
                 let remainder = orphanPots % mainWinners.length;
-
                 for (const winnerIndex of mainWinners) {
                     updatedStacks[winnerIndex] += share;
                     if (remainder > 0) {
@@ -325,7 +353,6 @@ class PokerTable {
                 }
             }
         }
-
         return { updatedStacks, detailedWinners };
     }
 
@@ -334,20 +361,15 @@ class PokerTable {
             const table = this.table;
             const pokerTable = this;    
             const tableSessionId = this.id;
-            let completeCard = false;
             
             if(table.isHandInProgress()) {
-                // // console.log('[PLAYER ACTION] Table - Hand in progress !');
                 if(table.isBettingRoundInProgress()) {
                     if(table.playerToAct() !== playerSeats) {
-                        // // console.log('[PLAYER ACTION] Table - Player to act is different to player seats !');
                         if(socket != null) {
                             socket.emit('playerActionError', { message: 'not your turn' });
                         }
-                        // // console.log('×');
                         return;
                     }else {
-                        // // console.log('[PLAYER ACTION] Table - Player to act is the same as player seats !');
                         if (action == 'fold') {
                             if(!pokerTable.foldedPlayers.has(playerSeats)) {
                                 pokerTable.foldedPlayers.add(playerSeats);
@@ -355,9 +377,7 @@ class PokerTable {
                             pokerTable.holeCardsToShow[playerSeats] = null;
                         }    
                         table.actionTaken(action, bet);
-    
                         pokerTable.cancelAutoFoldTimer();
-                        
                         pokerTable.currentRoundActions = pokerTable.currentRoundActions.filter(
                             action => action.playerId !== playerSeats
                         );
@@ -377,70 +397,56 @@ class PokerTable {
                                 const seatDisconnected = p.seatIndex;
                                 const currentPlayer = this.getPlayer(seatDisconnected);
                                 try {
-                                    if(table.playerToAct() === Number(seatDisonnected) && currentPlayer?.user?.id === uid) {
-                                        if(!pokerTable.foldedPlayers.has(seatDisonnected)) {
-                                            pokerTable.foldedPlayers.add(seatDisonnected);
+                                    if(table.playerToAct() === Number(seatDisconnected) && currentPlayer?.user?.id === uid) {
+                                        if(!pokerTable.foldedPlayers.has(seatDisconnected)) {
+                                            pokerTable.foldedPlayers.add(seatDisconnected);
                                         }
-                                        pokerTable.holeCardsToShow[seatDisonnected] = null;
+                                        pokerTable.holeCardsToShow[seatDisconnected] = null;
                                         table.actionTaken('fold');
                                         actionTaken = true;
-        
                                         pokerTable.currentRoundActions = pokerTable.currentRoundActions.filter(
-                                            action => action.playerId !== seatDisonnected
+                                            action => action.playerId !== seatDisconnected
                                         );
                                         pokerTable.currentRoundActions.push({
-                                            playerId: seatDisonnected,
+                                            playerId: seatDisconnected,
                                             action: 'fold',
                                             amount: 0
                                         });
                                     }
                                 } catch (ignored) {
                                     actionTaken = false;
-                                    console.error('[PLAYER ACTION] Ignored', ignored);                     
                                 }
                             }
                         }
                         loopSafetyCounter++;
-                        if (loopSafetyCounter > 10) {
-                          console.warn('Auto fold loop stopped by security !');
-                          break;
-                        }
+                        if (loopSafetyCounter > 10) break;
                     } while (actionTaken);
                 } 
                 if(!table.isBettingRoundInProgress()) {
                     if (!pokerTable.manualPots[pokerTable.roundIndex]) {
                         pokerTable.manualPots[pokerTable.roundIndex] = [];
                     }
-    
                     const seats = table.seats() || [];
                     for (let i = 0; i < seats.length; i++) {
                         if (seats[i]) {
                             const manualPot = pokerTable.manualPots[pokerTable.roundIndex];
                             const existingEntry = manualPot.find(entry => entry.seatIndex === i);
-
-                            // // console.log('[PLAYER ACTION] MANUAL POT', manualPot);
-                            // // console.log('[PLAYER ACTION] EXISTING ENTRY', existingEntry);
                             if (existingEntry) {
                                 existingEntry.betSize = seats[i].betSize;
-                                // // console.log('[PLAYER ACTION] existing entry bet size', existingEntry.betSize);
                             } else {
                                 manualPot.push({ seatIndex: i, betSize: seats[i].betSize });
-                                // // console.log('[PLAYER ACTION] New MANUAL POT', manualPot);
                             }
                         }
                     }
                     pokerTable.currentRoundActions = [];
                     pokerTable.roundIndex += 1;
-    
                     if(!table.areBettingRoundsCompleted()) {
                         table.endBettingRound();
                     }
                 }
                 
-                
                 if (table.areBettingRoundsCompleted()) {
                     this.endGame();
-                    
                 }else {
                     pokerTable.broadcastState(true);
                 }
@@ -451,20 +457,15 @@ class PokerTable {
     }
 
     getFreesit() {
-        const freesit = Number(this.maxSeats) - Number(this.seatTaken.size);
-        return freesit;
+        return Number(this.maxSeats) - Number(this.seatTaken.size);
     }
 
     cleanPots(pots, foldedPlayers) {
         const cleanedPots = [];
-        
         let orphanPotSize = 0;
-        
-
         for (const pot of pots) {
             const eligiblePlayersBeforeFilter = pot.eligiblePlayers.length;
             pot.eligiblePlayers = pot.eligiblePlayers.filter(p => !foldedPlayers.includes(p));
-
             if (pot.eligiblePlayers.length === 0) {
                 orphanPotSize += pot.size;
             } else {
@@ -472,56 +473,38 @@ class PokerTable {
                 cleanedPots.push(pot);
             }
         }
-
-        if (cleanedPots.length === 2) {
-            const size0 = cleanedPots[0].size;
-            const size1 = cleanedPots[1].size;
-
-            if (size0 === 2 * size1 || size1 === 2 * size0) {
-                cleanedPots[0].isRakeable = true;
-                cleanedPots[1].isRakeable = true;
-            }
-        }
-
         return {cleanedPots, orphanPotSize};
     }
 
     restorePots() {
         const allRoundPots = [];
         let orphanPots = 0;
-
         for (let roundIndex = 0; roundIndex < this.manualPots.length; roundIndex++) {
             const roundBets = this.manualPots[roundIndex];
             if (!roundBets || roundBets.length === 0) {
                 allRoundPots.push([]);
                 continue;
             }
-
             const totalBetsBySeat = new Map();
             for (const { seatIndex, betSize } of roundBets) {
                 if (betSize > 0) {
                     totalBetsBySeat.set(seatIndex, (totalBetsBySeat.get(seatIndex) || 0) + betSize);
                 }
             }
-
             let seatStacks = Array.from(totalBetsBySeat.entries())
-            .map(([seatIndex, amount]) => ({ seatIndex, remaining: amount }));
+                .map(([seatIndex, amount]) => ({ seatIndex, remaining: amount }));
             const pots = [];
-
             while (seatStacks.length > 0) {
                 const minBet = Math.min(...seatStacks.map(s => s.remaining));
-
                 const eligible = seatStacks.map(s => s.seatIndex);
-
                 const potSize = minBet * eligible.length;
                 pots.push({
                     size: potSize,
                     eligiblePlayers: [...eligible]
                 });
-
                 seatStacks = seatStacks
-                .map(s => ({ seatIndex: s.seatIndex, remaining: s.remaining - minBet }))
-                .filter(s => s.remaining > 0);
+                    .map(s => ({ seatIndex: s.seatIndex, remaining: s.remaining - minBet }))
+                    .filter(s => s.remaining > 0);
             }
             const {cleanedPots, orphanPotSize} = this.cleanPots(pots, Array.from(this.foldedPlayers.values()));
             orphanPots += orphanPotSize; 
@@ -532,31 +515,21 @@ class PokerTable {
     }
 
     mergeAndSortPotsByRound(flatedPots, orphanPots) {
-        const merged = [...flatedPots];
-        const sorted = merged.sort((a, b) => b.eligiblePlayers.length - a.eligiblePlayers.length);
-    
+        const sorted = [...flatedPots].sort((a, b) => b.eligiblePlayers.length - a.eligiblePlayers.length);
         const groupedMap = new Map();
-
         for (const pot of sorted) {
-            if  (pot.eligiblePlayers.length <= 1) continue;
+            if (pot.eligiblePlayers.length <= 1) continue;
             const key = pot.eligiblePlayers.slice().sort((a, b) => a - b).join(',');
-
             if (groupedMap.has(key)) {
                 groupedMap.get(key).size += pot.size;
             } else {
                 groupedMap.set(key, { ...pot, eligiblePlayers: [...pot.eligiblePlayers] });
             }
         }
-
         const result = Array.from(groupedMap.values());
-
         if (orphanPots > 0) {
-            result.push({
-                size: orphanPots,
-                eligiblePlayers: []
-            });
+            result.push({ size: orphanPots, eligiblePlayers: [] });
         }
-        
         return result;
     }
 
@@ -565,110 +538,115 @@ class PokerTable {
             if (player.seatIndex != undefined) {
                 try {
                     const seats = this.table.seats();
-                    // // console.log('[REPLACE PLAYER] seat state :', seats[player.seatIndex]);
                     if (seats[player.seatIndex] !== null) {
-                        // // console.log('[REPLACE PLAYER] stand up');
                         this.table.standUp(player.seatIndex);  
                     }
-                    
                     const stack = stacks[player.seatIndex];
                     if(stack && stack > 0) {
-                        const seats = this.table.seats();
-                        // // console.log('[REPLACE PLAYER] seat state :', seats[player.seatIndex]);
-                        if (seats[player.seatIndex] === null) {
-                            // // console.log('[REPLACE PLAYER] sit down');
-                            this.table.sitDown(player.seatIndex, stack);
-                        }
-                            
+                        this.table.sitDown(player.seatIndex, stack);
                     } else {
-                        // // console.log("[REPLACE PLAYER] To remove :", player.seatIndex );
+                        if (player.isAgent) {
+                            this.removedPlayers.set(player.seatIndex, player);
+                        } else {
+                            const userId = player.user.id;
+                            this.waitingForRecave.add(userId);
                             
-                        this.removedPlayers.set(player.seatIndex, player);
+                            // Auto-kick after 15 seconds if no recave
+                            if (!this.recaveTimers.has(userId)) {
+                                const timeoutId = setTimeout(async () => {
+                                    console.log(`[AUTOKICK] Player ${userId} timed out for recave`);
+                                    this.recaveTimers.delete(userId);
+                                    this.waitingForRecave.delete(userId);
+                                    
+                                    // Notify player and remove
+                                    player.send('quitsuccess', {});
+                                    await this.removePlayer(player.socketio.id);
+                                    this.broadcastState();
+
+                                    // If no one else waiting, try restart
+                                    if (this.waitingForRecave.size === 0 && this.seatTaken.size >= 2 && !this.table.isHandInProgress()) {
+                                        this.shareCards();
+                                        await new Promise(r => setTimeout(r, 5000));
+                                        this.startGame();
+                                        this.broadcastState();
+                                    }
+                                }, 45000);
+                                this.recaveTimers.set(userId, timeoutId);
+                            }
+                        }
                     }
                 } catch (err) {
                     console.error('[REPLACE PLAYER] ERR seat', player.seatIndex, err);
-                    // console.log('[REPLACE PLAYER] Remove player');
                     await this.removePlayer(player.socketio.id);
                 }
             }
         }
     }
 
-    prepareHistoriqueMain(
-        communityCards,
-        holeCards,
-        foldedPlayers,
-        mainWinners,
-        playerNames
-        ) {
-        
+    prepareHistoriqueMain(communityCards, holeCards, foldedPlayers, mainWinners, playerNames) {
         const table_name = this.tableInfo?.name ?? '-';
         const main_joueurs = [];
-
         for (let i = 0; i < playerNames.length; i++) {
             const pseudo = playerNames[i];
             const cartes = holeCards[i];
-        
             if (pseudo && Array.isArray(cartes) && cartes.length > 0) {
                 main_joueurs.push({ pseudo, cards: cartes });
             }
         }
-
         const foldes = [];
-        if (foldedPlayers instanceof Set) {
-            for (const idx of foldedPlayers) {
+        const foldedIdxs = foldedPlayers instanceof Set ? Array.from(foldedPlayers) : (Array.isArray(foldedPlayers) ? foldedPlayers : []);
+        for (const idx of foldedIdxs) {
             if (playerNames[idx]) foldes.push(playerNames[idx]);
-            }
-        } else if (Array.isArray(foldedPlayers)) {
-            for (const idx of foldedPlayers) {
-            if (playerNames[idx]) foldes.push(playerNames[idx]);
-            }
         }
-
         const gagnants = [];
         if (Array.isArray(mainWinners)) {
             for (const idx of mainWinners) {
-                const playerName = playerNames[idx.playerIndex];
+                const playerName = playerNames[idx.playerIndex] || playerNames[idx];
                 if (playerName && !gagnants.includes(playerName)) {
                     gagnants.push(playerName);
                 }
             }
         }
-
         if (gagnants.length === 0) {
             for (const pseudo of playerNames) {
                 if (pseudo && !foldes.includes(pseudo)) {
                     gagnants.push(pseudo);
-                    break; // On suppose qu’un seul gagnant
+                    break;
                 }
             }
         }
-
-
-        return {
-            table_name,
-            cartes_communaute: communityCards,
-            main_joueurs,
-            foldes,
-            gagnants
-        };
+        return { table_name, cartes_communaute: communityCards, main_joueurs, foldes, gagnants };
     }
 
-
-    checkStartConditions() {
+    async checkStartConditions() {
         if (!this.table.isHandInProgress() && !this.isShowDownInProgress && this.seatTaken.size >= 2) {
-            this.startGame();
-                   
+            await this.startGame();
         }
         try {
             this.broadcastState();
         } catch (error) {
-            console.log(error);
-            
+            console.error(error);
         }
     }
 
-    startGame() {
+    async startGame() {
+        // Double-check to prevent starting with < 2 players
+        if (this.seatTaken.size < 2) {
+            console.warn(`[TABLE ${this.tableInfo.id}] Cannot start hand: only ${this.seatTaken.size} players seated.`);
+            return;
+        }
+
+        try {
+            const latestTable = await Table.findByPk(this.tableInfo.id);
+            if (latestTable) {
+                this.gameType = latestTable.gameType;
+                this.tableInfo = latestTable.get({ plain: true });
+            }
+        } catch (err) {
+            console.error("Error refreshing table gameType:", err);
+        }
+
+        // console.log(`[DEBUG] Starting Game - Type: ${this.gameType}`);
         this.foldedPlayers = new Set();
         this.table.startHand();
         this.activePlayers = this.table.numActivePlayers();
@@ -702,21 +680,50 @@ class PokerTable {
 
         const hands = this.table.holeCards();
 
-        if (hands?.length > 0) {
+        if (this.gameType === 'omaha') {
+            // console.log("[DEBUG] Omaha mode: Taking full control of card distribution.");
+            const ALL_CARDS = [
+                '2c', '2d', '2h', '2s', '3c', '3d', '3h', '3s', '4c', '4d', '4h', '4s',
+                '5c', '5d', '5h', '5s', '6c', '6d', '6h', '6s', '7c', '7d', '7h', '7s',
+                '8c', '8d', '8h', '8s', '9c', '9d', '9h', '9s', 'Tc', 'Td', 'Th', 'Ts',
+                'Jc', 'Jd', 'Jh', 'Js', 'Qc', 'Qd', 'Qh', 'Qs', 'Kc', 'Kd', 'Kh', 'Ks',
+                'Ac', 'Ad', 'Ah', 'As'
+            ];
             
-            const holesCardsPlayer = hands.map(hand => 
-                Array.isArray(hand)
-                    ? hand.map(c => `${c.rank}${c.suit?.[0] ?? '?'}`)
-                    : []
-            );
-            this.holeCards = [...holesCardsPlayer];
-            this.holeCardsToShow = [...holesCardsPlayer];
+            let deck = [...ALL_CARDS];
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
 
+            this.holeCards = Array(this.maxSeats).fill(null);
+            this.holeCardsToShow = Array(this.maxSeats).fill(null);
+
+            for (let i = 0; i < this.maxSeats; i++) {
+                if (this.playerInHandInitial.has(i)) {
+                    const cards = deck.splice(0, 4);
+                    this.holeCards[i] = cards;
+                    this.holeCardsToShow[i] = cards;
+                } else {
+                    this.holeCards[i] = [];
+                    this.holeCardsToShow[i] = [];
+                }
+            }
+            // Pre-deal Omaha community cards to avoid duplicates
+            this.omahaCommunityCards = deck.splice(0, 5);
+            // console.log("[DEBUG] Omaha community cards pre-dealt:", this.omahaCommunityCards);
+        } else {
+            this.omahaCommunityCards = null;
+            if (hands?.length > 0) {
+                const holesCardsPlayer = hands.map(hand => 
+                    Array.isArray(hand) ? hand.map(c => `${c.rank}${c.suit?.[0] ?? '?'}`) : []
+                );
+                this.holeCards = [...holesCardsPlayer];
+                this.holeCardsToShow = [...holesCardsPlayer];
+            }
         }
         this.broadcastStart();
-        this.broadcastState(true)
-        
-        // // console.log('🃏 Partie démarrée automatiquement !');
+        this.broadcastState(true);
     }    
 
     hasSeatAvailable() {
@@ -745,53 +752,29 @@ class PokerTable {
 
             if (seatIndex === null) return false;
             
-            function rand(min, max) {
-                return Math.floor(Math.random() * (max - min + 1)) + min;
-            }
-
-            const avatar = `${rand(0, this.avatarsMaxNb - 1)}.png`;
-            // // console.log('[ADD PLAYER] avatar :', avatar);
+            const avatar = `${Math.floor(Math.random() * this.avatarsMaxNb)}.png`;
             const existingAvatar = this.avatars.find(avt => avt.userId === player.user.id); 
             if (existingAvatar) {
                 existingAvatar.avatar = avatar;
             } else {
-                this.avatars.push({
-                    userId: player.user.id,
-                    avatar: avatar,
-                });
+                this.avatars.push({ userId: player.user.id, avatar });
             }
 
-            const seats = this.table.seats();
-            if (seats[seatIndex] !== null) {
-              this.table.standUp(seatIndex);
-            }
-            
             this.table.sitDown(seatIndex, player.chips);
-            
             this.players.set(player.socketio.id, player);
             player.seatIndex = seatIndex;
             this.seatTaken.add(seatIndex);
             this.checkStartConditions();
             this.caves.set(player.user.id, player.chips);
 
-            let playerCavesVal = playerCavesMap.get(player.user.id);
-            let caveObj = playerCavesVal?.find(cave => cave.tableId === this.tableInfo.id);
-            
+            let playerCavesVal = playerCavesMap.get(player.user.id) || [];
+            let caveObj = playerCavesVal.find(cave => cave.tableId === this.tableInfo.id);
             if (caveObj) {
                 caveObj.cave = player.chips;
             } else {
-                caveObj = {
-                    tableId: this.tableInfo.id,
-                    cave: player.chips,
-                }
-                // console.log('[ADD PLAYER] new cave object', caveObj);
-                playerCavesVal = playerCavesVal ?? [];
-                playerCavesVal.push(caveObj);
+                playerCavesVal.push({ tableId: this.tableInfo.id, cave: player.chips });
             }
-            // console.log('[ADD PLAYER] new player caves value', playerCavesVal);
-
             playerCavesMap.set(player.user.id, playerCavesVal);
-
             return true;
         }catch(err) {
             console.error('[ADD PLAYER] ERR', err);
@@ -803,46 +786,39 @@ class PokerTable {
         try {
             const player = this.players.get(socketId);
             if (!player) return false;
-        
+            
+            // Cleanup cards when player leaves
+            this.holeCards = Array(this.maxSeats).fill(null);
+            this.holeCardsToShow = Array(this.maxSeats).fill(null);
+            this.omahaCommunityCards = null;
+
             const seatIndex = player.seatIndex;
             this.seatTaken.delete(seatIndex);
             this.players.delete(socketId);
             
-            const seats = this.table.seats();
-            // console.log('[REMOVE PLAYER] seat state :', seats[seatIndex]);
-            
-          //  if (seats[seatIndex] === null) return false;
-            
-            // console.log('[REMOVE PLAYER] remove player table id', this.tableInfo.id);
+            this.waitingForRecave.delete(player.user.id);
+            if (this.recaveTimers.has(player.user.id)) {
+                clearTimeout(this.recaveTimers.get(player.user.id));
+                this.recaveTimers.delete(player.user.id);
+            }
+
             let playerTables = playerTablesMap.get(player.user.id) ?? [];
-            // console.log('[REMOVE PLAYER] player tables before', playerTables);
             playerTables = playerTables.filter(table => Number(table) !== Number(this.tableInfo.id));
-            // console.log('[REMOVE PLAYER] player table after', playerTables);
             playerTablesMap.set(player.user.id, playerTables);
            
-            this.table.standUp(seatIndex);
-
-            // console.log('[REMOVE PLAYER] remove avatar of user', player.user.id);
+            if (this.seatTaken.has(seatIndex)) {
+                this.table.standUp(seatIndex);
+            }
             this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
-
             playerCavesMap.delete(player.user.id);
-            
+
+            // Broadcast after cleanup
+            this.broadcastState();
+
             return true;
         }catch (err) {
             console.error('[REMOVE PLAYER] ERR', err);
         }
-    }
-
-    countPlayer() {
-        const stacks = this.table.seats();
-        let count = 0;
-        stacks.forEach(stack => {
-            if(!stack) {
-                count ++;
-            }    
-        });
-
-        return count;
     }
 
     getPlayer(seatindex) {
@@ -851,69 +827,46 @@ class PokerTable {
                 return player;
             }
         }
-        return null
+        return null;
     }
 
     startAutoFoldTimer(expectedToAct) {
-        try {
-            if (this.autoFoldTimeout) {
-                clearTimeout(this.autoFoldTimeout);
-                this.autoFoldTimeout = null;
-            }
-
-            if (this.table.isHandInProgress()) {
-                const toAct = this.table.playerToAct();
-                if (expectedToAct !== toAct) {
-                  return;
-                }
-                this.autoFoldTimeout = setTimeout(async () => {
-                    try {
-                        const stillToAct = this.table.playerToAct();
-                        
-                        if (toAct === stillToAct) {
-                            const player = this.getPlayer(stillToAct);
-                            const action = this.table.legalActions().actions.includes('check') ? 'check' : 'fold';
-                            
-                            await this.playerAction(player?.socketio ?? null, stillToAct, action, 0, disconnectedPlayers);
-                        }
-                    } catch (error) {
-                      console.error('[AUTOFOLD TIMER] ERR', error);
+        if (this.autoFoldTimeout) clearTimeout(this.autoFoldTimeout);
+        if (this.table.isHandInProgress()) {
+            const toAct = this.table.playerToAct();
+            if (expectedToAct !== toAct) return;
+            this.autoFoldTimeout = setTimeout(async () => {
+                try {
+                    const stillToAct = this.table.playerToAct();
+                    if (toAct === stillToAct) {
+                        const player = this.getPlayer(stillToAct);
+                        const action = this.table.legalActions().actions.includes('check') ? 'check' : 'fold';
+                        await this.playerAction(player?.socketio ?? null, stillToAct, action, 0, disconnectedPlayers);
                     }
-                }, 12000);
-            }
-        }catch(err) {
-          console.error('Error', err);
+                } catch (error) {
+                    console.error('[AUTOFOLD TIMER] ERR', error);
+                }
+            }, 12000);
         }
     }
 
     cancelAutoFoldTimer() {
-        try {
-            if (this.autoFoldTimeout) {
-                clearTimeout(this.autoFoldTimeout);
-                this.autoFoldTimeout = null;
-            }
-        } catch (error) {
-          console.error('Error', error);
+        if (this.autoFoldTimeout) {
+            clearTimeout(this.autoFoldTimeout);
+            this.autoFoldTimeout = null;
         }
     }
 
     isPlayerInHand(seatIndex) {
-        if(!this.table.isHandInProgress()) {
-            return false;
-        }
-        const result = this.playerInHandInitial.has(seatIndex) && !this.foldedPlayers.has(seatIndex);
-     //   // console.log(result);
-        return result;
+        if(!this.table.isHandInProgress()) return false;
+        return this.playerInHandInitial.has(seatIndex) && !this.foldedPlayers.has(seatIndex);
     }
 
     getActiveSeats() {
         const activeSeats = [];
         for (let i = 0; i < this.maxSeats; i++) {
-            if (this.isPlayerInHand(i)) {
-                activeSeats.push(i);
-            }
+            if (this.isPlayerInHand(i)) activeSeats.push(i);
         }
-        // console.log('Active seats :', activeSeats);
         return activeSeats;
     }
 
@@ -923,48 +876,73 @@ class PokerTable {
         }
     }
 
-    async broadcastStart() {
+    broadcastStart() {
         for (const player of this.players.values()) {
             player.send("start", {message: "started"});
         }
     }
 
+    addAgent(chips = 1000) {
+        const seatIndex = this.getAvailableSeatIndex();
+        if (seatIndex === null) return false;
+        const agentUser = { id: -1 - seatIndex, name: `Agent_${seatIndex}`, chips };
+        const agent = new OmahaAgent(agentUser, chips);
+        agent.seatIndex = seatIndex;
+        this.table.sitDown(seatIndex, chips);
+        this.players.set(`agent_${seatIndex}`, agent);
+        this.seatTaken.add(seatIndex);
+        this.caves.set(agentUser.id, chips);
+        this.avatars.push({ userId: agentUser.id, avatar: `0.png` });
+        this.checkStartConditions();
+        return true;
+    }
+
+    async triggerAgentAction(seatIndex) {
+        const agent = this.getPlayer(seatIndex);
+        if (!agent || !agent.isAgent) return;
+        setTimeout(async () => {
+            const decision = agent.decideAction(this);
+            await this.playerAction(null, seatIndex, decision.action, decision.bet, disconnectedPlayers);
+            this.broadcastState();
+        }, 2000);
+    }
+
     broadcastState(isStart = false) {
         const activeSeats = this.getActiveSeats();
         const handInProgress = this.table.isHandInProgress();
-       // // console.log('Hand in progress :', handInProgress);
         const tableId = this.id;
         const button = handInProgress ? this.table.button() : null;
-        const communityCards = handInProgress
-            ? this.table.communityCards().map(c => `${c.rank}${c.suit[0]}`)
-            : [];
-        const {combined, orphanPots} = this.restorePots()
-        let pots = this.roundIndex !== 0 ? this.mergeAndSortPotsByRound(combined, orphanPots) : [{size:0}];
         
-        if (handInProgress && pots.length > 0) {
-            this.lastPots = pots;
-        }        
+        let communityCards = [];
+        if (handInProgress) {
+            if (this.gameType === 'omaha' && this.omahaCommunityCards) {
+                const round = this.table.roundOfBetting();
+                if (round === 'flop') communityCards = this.omahaCommunityCards.slice(0, 3);
+                else if (round === 'turn') communityCards = this.omahaCommunityCards.slice(0, 4);
+                else if (round === 'river') communityCards = this.omahaCommunityCards.slice(0, 5);
+                else communityCards = [];
+            } else {
+                communityCards = this.table.communityCards().map(c => `${c.rank}${c.suit[0]}`);
+            }
+        }
+
+        const {combined, orphanPots} = this.restorePots();
+        let pots = this.roundIndex !== 0 ? this.mergeAndSortPotsByRound(combined, orphanPots) : [{size:0}];
+        if (handInProgress && pots.length > 0) this.lastPots = pots;
 
         let toAct = null;
         if (handInProgress) {
             if(!this.table.isBettingRoundInProgress() && !this.table.areBettingRoundsCompleted()) {
-                try{
-                    // console.log("End betting round");
-                    this.table.endBettingRound();
-                }catch(ignored) {}
+                try { this.table.endBettingRound(); } catch(ignored) {}
             }
             if(this.table.isBettingRoundInProgress()) {
-                // console.log('Betting round is in progress !');
                 toAct = this.table.playerToAct();
-                // console.log('To act :', toAct);
             } else if (this.table.areBettingRoundsCompleted()) {
-              // console.log('Game Over !');
-              return this.endGame();
+                return this.endGame();
             }
         }
         
         const step = handInProgress ? this.table.roundOfBetting() : null;
-        
         const playerNames = Array(this.maxSeats).fill(null);
         const playerIds = Array(this.maxSeats).fill(null);
         for (const player of this.players.values()) {
@@ -974,14 +952,12 @@ class PokerTable {
             }
         }
 
-        // console.log('[BROADCAST STATE] avatars :', this.avatars);
-
         for (const player of this.players.values()) {
             try {
                 const seatIndex = player.seatIndex;
-                
                 const data = {
                     tableId,
+                    gameType: this.gameType,
                     seat: seatIndex,
                     deal_btn: button,
                     handInProgress,
@@ -994,24 +970,16 @@ class PokerTable {
                     playerIds,
                     actions: this.currentRoundActions,
                     playerCards: this.holeCards[seatIndex],
-                    legalActions: handInProgress && seatIndex === toAct
-                        ? this.table.legalActions()
-                        : [],
+                    legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
                     pots,
                     avatars: this.avatars,
+                    waitingForRecave: Array.from(this.waitingForRecave),
+                    minCave: this.tableInfo.cave
                 };
-                
                 player.send('tableState', data);
-                
-                if(isStart && toAct !== null && toAct !== undefined) {
-                    try{
-                        this.startAutoFoldTimer(toAct);
-                    }catch(err) {
-                      console.error('Error', err);
-                    }
-                }
+                if(isStart && toAct !== null && toAct !== undefined) this.startAutoFoldTimer(toAct);
             } catch (error) {
-                console.error(`Erreur d'envoi à ${player.name || 'unknown'} :`, error);
+                console.error(`Erreur d'envoi à ${player.user?.name || 'unknown'} :`, error);
             }
         }
     }

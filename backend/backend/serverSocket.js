@@ -12,7 +12,7 @@ const playerCavesMap = require('./game/playerCaves');
 const idlePlayersMap = require('./game/idlePlayers');
 
 const pokerTables = new Map();
-
+const lockPromises = new Map(); 
 function formatTime(ms) {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -38,7 +38,19 @@ function getFreeSits(tableIds) {
   }
   return result;
 }
-
+async function acquireLock(tableId) {
+    // Tant qu'un lock existe sur cette table, on attend qu'il se libère
+    while (lockPromises.get(tableId)) {
+        await lockPromises.get(tableId); // on attend la fin du joueur précédent
+    }
+    
+    // On crée notre propre lock (une Promise non résolue)
+    let resolve;
+    const p = new Promise(r => resolve = r);
+    lockPromises.set(tableId, p); // on bloque la table pour nous
+    
+    return resolve; // on retourne la fonction pour se "déverrouiller" plus tard
+}
 function findTableWithAvailableSeat(tableId) {
     const sessionMap = pokerTables.get(tableId);
     if (!sessionMap) return null;
@@ -47,7 +59,7 @@ function findTableWithAvailableSeat(tableId) {
     }
     return null;
 }
-
+//find table by id without checking for free seats
 function findTable(tableId) {
   const sessionMap = pokerTables.get(tableId);
   if (!sessionMap) return null;
@@ -73,9 +85,7 @@ async function createNewTable(tableId) {
 }
 
 function findPlayerInAllTables(userId, tableId) {
-    console.log('[FIND IN ALL TABLE] table id', tableId);
     const sessionMap = pokerTables.get(tableId);
-    console.log('[FIND IN ALL TABLE] session map', sessionMap);
     if (!sessionMap) return null;
     
     for (const [tableSessionId, table] of sessionMap.entries()) {
@@ -104,26 +114,17 @@ function findPlayerInAllTables(userId, tableId) {
 const serverSocket = (app) => {
     const httpServer = http.createServer(app);
     const socketServer = socketIo(httpServer, {
-        cors: { 
-            origin: "*",
-            methods: ["GET", "POST"],
-            credentials: true,
-            allowEIO3: true
-        },
-        transports: ["websocket", "polling"],
-        pingInterval: 25000,
-        pingTimeout: 60000,
-        upgradeTimeout: 10000,
-        allowUpgrades: true,
-        maxHttpBufferSize: 1e6,
-        enablesXDR: true
+        cors: { origin: "*" }
     });
     // socketServer.use(authenticateSocket);
     
+    socketServer.on('error', (err) => {
+        console.error('Socket.io server error:', err);
+    });
+
     let connectedUsers = new Map(); // Store all connected users
     let tableUsers = new Map(); // Store users by table
 
-    const tableLocks = new Map();
     const exitTimes = new Map();
     const tableChatHistory = new Map();
     const MAX_MESSAGES_PER_TABLE = 100;
@@ -131,40 +132,27 @@ const serverSocket = (app) => {
     
     socketServer.on("connection", (socket) => {
         console.log(`👤 Utilisateur connecté: ${socket.id}`);
-        console.log(`📡 Transport utilisé: ${socket.conn.transport.name}`);
-        console.log(`🔧 Socket handlers prêts`);
-        
-        // Ajouter des écouteurs d'erreur
-        socket.on('error', (error) => {
-            console.log(`⚠️ Erreur socket pour ${socket.id}:`, error);
-        });
-        
-        socket.conn.on('error', (error) => {
-            console.log(`⚠️ Erreur connexion pour ${socket.id}:`, error);
+
+        socket.on('error', (err) => {
+            console.error(`Socket error for ${socket.id}:`, err);
         });
 
-       socket.on("user_connected", (userData) => {
-    // ✅ Dédupliquer par userId
-    for (const [existingSocketId, existingUser] of connectedUsers.entries()) {
-        if (String(existingUser.userId) === String(userData.userId)) {
-            connectedUsers.delete(existingSocketId);
-        }
-    }
+        socket.on("user_connected", (userData) => {
+            connectedUsers.set(socket.id, {
+                socketId: socket.id,
+                userId: userData.userId,
+                username: userData.username,
+                connectedAt: new Date(),
+            });
 
-    connectedUsers.set(socket.id, {
-        socketId: socket.id,
-        userId: userData.userId,
-        username: userData.username,
-        connectedAt: new Date(),
-    });
+            // ✅ Envoyer à TOUS les clients (broadcast)
+            socketServer.emit("users_count_update", {
+                total: connectedUsers.size,
+                users: Array.from(connectedUsers.values()),
+            });
 
-    socketServer.emit("users_count_update", {
-        total: connectedUsers.size,
-        users: Array.from(connectedUsers.values()),
-    });
-
-    console.log(`✅ ${userData.username} connecté. Total authentifiés: ${connectedUsers.size}`);
-});
+            console.log(`✅ ${userData.username} connecté. Total: ${connectedUsers.size}`);
+        });
 
         socket.on("join_table", ({ tableId, userId, username }) => {
             socket.join(`table_${tableId}`);
@@ -199,11 +187,13 @@ const serverSocket = (app) => {
         // Émettre le nombre à tous les clients
         socketServer.emit('connectedUsersUpdate', { count: connectedUsersCount });
         
-        socket.on('joinAnyTable', async ({ tableId, userId, playerCave }) => {
-            try {
-                if (tableLocks.get(tableId)) {
-                    return socket.emit('joinError', { message: 'La table est temporairement verouillée, réessayez.' });
-                }
+                socket.on('joinAnyTable', async ({ tableId, userId, playerCave }) => {
+                            let release = null; // ✅ déclaré en dehors du try
+                        try {
+                                release = await acquireLock(tableId); // attend son tour
+                // if (tableLocks.get(tableId)) {
+                //     return socket.emit('joinError', { message: 'La table est temporairement verouillée, réessayez.' });
+                // }
                 
                 const exitTime = exitTimes.get(Number(userId));
                 const now = Date.now();
@@ -213,7 +203,7 @@ const serverSocket = (app) => {
                     // return socket.emit('joinError', { message: `Vous venez de quitter la table. Veuillez attendre ${formatTime(maxExitTime - (now - exitTime.date))}`})
                 }
             
-                tableLocks.set(tableId, true);
+                // tableLocks.set(tableId, true);
                 console.log('join : table =>', tableId, ', user =>', userId, ', cave =>', playerCave);
                 
                 const found = findPlayerInAllTables(userId, tableId);
@@ -262,7 +252,6 @@ const serverSocket = (app) => {
                     return;
                 }
 
-                console.log('[JOIN TABLE] player not found in table');
                 let table = findTable(tableId);
                 if (!table) { 
                     table = await createNewTable(tableId);
@@ -309,7 +298,10 @@ const serverSocket = (app) => {
                 console.log(`✅ Player ${userId} joined chat room: table-${tableId}`);
                 
                 const ownTables = playerTables.get(player.user.id) || [];
-                ownTables.push(tableId);
+                // ownTables.push(tableId);
+                if (!ownTables.includes(tableId)) {
+                    ownTables.push(tableId);
+                }
                 playerTables.set(player.user.id, ownTables);
                 
                 const disconnected = disconnectedPlayers.get(table.id);
@@ -330,7 +322,9 @@ const serverSocket = (app) => {
             } catch(err) {
                 console.error(err);
             } finally {
-                tableLocks.set(tableId, false);
+             //   tableLocks.set(tableId, false);
+                lockPromises.delete(tableId); // supprime le lock
+                if (typeof release === 'function') release(); // débloque le prochain en attente
             }
         });
 
@@ -347,6 +341,20 @@ const serverSocket = (app) => {
             } catch (err) {
                 console.error('player action error', err);
                 socket.emit('playerActionError', { message: err.message || 'Une erreur est survenue lors de l\'action du joueur.' });
+            }
+        });
+
+        socket.on("recave", async ({ tableId, tableSessionId, amount }) => {
+            try {
+                const pokerTable = pokerTables.get(tableId)?.get(tableSessionId);
+                if (pokerTable) {
+                    const userId = connectedUsers.get(socket.id)?.userId;
+                    if (userId) {
+                        await pokerTable.recave(userId, amount);
+                    }
+                }
+            } catch (err) {
+                console.error('recave error', err);
             }
         });
 
@@ -458,32 +466,39 @@ const serverSocket = (app) => {
         });
 
         // ✅ ÉCOUTER l'événement disconnect (ne pas l'émettre)
-    socket.on("disconnect", (reason) => {
-    const user = connectedUsers.get(socket.id);
-
-    if (user) {
-        console.log(`❌ ${user.username} déconnecté. Raison: ${reason}`);
-        connectedUsers.delete(socket.id);
-
-        tableUsers.forEach((users, tableId) => {
-            if (users.has(user.userId)) {
-                users.delete(user.userId);
-                socketServer.to(`table_${tableId}`).emit("table_users_update", {
-                    tableId,
-                    count: users.size,
+        socket.on("disconnect", (reason) => {
+            const user = connectedUsers.get(socket.id);
+            
+            if (user) {
+                console.log(`❌ ${user.username} déconnecté (raison: ${reason})`);
+                
+                connectedUsers.delete(socket.id);
+                
+                // Nettoyer les tables
+                tableUsers.forEach((users, tableId) => {
+                    if (users.has(user.userId)) {
+                        users.delete(user.userId);
+                        socketServer.to(`table_${tableId}`).emit("table_users_update", {
+                            tableId,
+                            count: users.size,
+                        });
+                    }
                 });
+
+                socketServer.emit("users_count_update", {
+                    total: connectedUsers.size,
+                });
+                for (const [tid, sessionMap] of pokerTables.entries()) {
+                    for (const [sessionId, table] of sessionMap.entries()) {
+                        if (table.players.has(socket.id)) {
+                            const player = table.players.get(socket.id);
+                            console.log(`💀 Joueur ${player.user.id} déconnecté de la table ${tid}`);
+                            table.handleDisconnect(player.user.id); // selon ta logique métier
+                        }
+                    }
+                 }
             }
         });
-
-        socketServer.emit("users_count_update", {
-            total: connectedUsers.size,
-            users: Array.from(connectedUsers.values()),
-        });
-
-        console.log(`👥 Total authentifiés après déconnexion: ${connectedUsers.size}`);
-    }
-    // ✅ Si user inconnu (pas authentifié), on ignore = pas d'emit parasite
-});
 
     });
 
@@ -510,4 +525,4 @@ const serverSocket = (app) => {
     return httpServer;
 }
 
-module.exports = { serverSocket, getFreeSits, findPlayerInAllTables, getConnectionStats };
+module.exports = { serverSocket, getFreeSits, findPlayerInAllTables, getConnectionStats, findTable };
