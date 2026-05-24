@@ -77,6 +77,10 @@ class PokerTable {
             }
             playerCavesMap.set(userId, playerCavesVal);
 
+            // Important: libérer le siège avant de se rasseoir avec le nouveau montant
+            if (this.table.seats()[player.seatIndex] !== null) {
+                this.table.standUp(player.seatIndex);
+            }
             this.table.sitDown(player.seatIndex, amount);
             this.waitingForRecave.delete(userId);
 
@@ -975,7 +979,7 @@ class PokerTable {
                     playerNames,
                     playerIds,
                     actions: this.currentRoundActions,
-                    playerCards: this.holeCards[seatIndex],
+                    playerCards: handInProgress ? this.holeCards[seatIndex] : [],
                     legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
                     pots,
                     avatars: this.avatars,
