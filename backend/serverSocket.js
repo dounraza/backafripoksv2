@@ -370,6 +370,7 @@ const serverSocket = (app) => {
                 console.log('Exit player', player.seatIndex);
 
                 try {
+                    // Restriction de 45 minutes pour 'quit'
                     if (player.quiteDate && Date.now() <= player.quiteDate.getTime() && table.seatTaken.size > 1) {
                         const timeLeftMs = player.quiteDate.getTime() - Date.now();
                         const minutes = Math.floor(timeLeftMs / 60000);
@@ -395,6 +396,32 @@ const serverSocket = (app) => {
                 
                 socket.leave(`table-${tableId}`);
                 console.log(`❌ Player ${player.user.id} left chat room: table-${tableId}`);
+                
+                table.removePlayer(socket.id);       
+                table.broadcastState();
+                socket.emit("quitsuccess", {});
+            } catch (err) {
+                console.error('Error', err);
+                socket.emit("quiterror", {tableId, tableSessionId});
+            }
+        });
+
+        socket.on('quitDefinitive', async ({ tableId, tableSessionId }) => {
+            try {
+                const sessionMap = pokerTables.get(tableId);
+                if (!sessionMap) return;
+                const table = sessionMap.get(tableSessionId);
+                if (!table || !table.players) return;
+                const player = table.players.get(socket.id);
+                if (!player) return;
+                
+                console.log('Definitive Exit player', player.seatIndex);
+                
+                let ownTables = playerTables.get(player.user.id) ?? [];
+                ownTables = ownTables.filter(table => table !== tableId);
+                playerTables.set(player.user.id, ownTables);
+                
+                socket.leave(`table-${tableId}`);
                 
                 table.removePlayer(socket.id);       
                 table.broadcastState();

@@ -83,19 +83,8 @@ class PokerTable {
             }
             this.table.sitDown(player.seatIndex, amount);
             this.waitingForRecave.delete(userId);
-
             this.broadcastState();
-
-            if (this.waitingForRecave.size === 0 && !this.table.isHandInProgress() && !this.isShowDownInProgress) {
-                setTimeout(async () => {
-                    if (this.waitingForRecave.size === 0 && this.seatTaken.size >= 2) {
-                        this.shareCards();
-                        await new Promise(resolve => setTimeout(resolve, 5000));
-                        this.startGame();
-                        this.broadcastState();
-                    }
-                }, 2000);
-            }
+            await this.checkStartConditions();
             return true;
         } catch (err) {
             console.error('[RECAVE] Error', err);
@@ -251,7 +240,9 @@ class PokerTable {
                     communityCards: communityCard
                 }
                     
-                pokerTable.broadcastWin(result);
+                setTimeout(() => {
+                    pokerTable.broadcastWin(result);
+                }, 1000);
                 
                 // Privacy: Hide all cards after win broadcast
                 pokerTable.holeCards = Array(this.maxSeats).fill([]);
@@ -559,6 +550,7 @@ class PokerTable {
                             this.removedPlayers.set(player.seatIndex, player);
                         } else {
                             const userId = player.user.id;
+                            console.log(`[DEBUG] replacePlayer: User ${userId} at seat ${player.seatIndex} has stack ${stack}. Adding to waitingForRecave.`);
                             this.waitingForRecave.add(userId);
                             
                             // Auto-kick after 15 seconds if no recave
