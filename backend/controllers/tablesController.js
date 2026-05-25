@@ -7,7 +7,12 @@ exports.findAll = asyncHandler(async (req, res)=> {
     try {
         const tables = await Table.findAll();
         const tableIds = tables.map(t => t.id);
-        const occupiedSeatsMap = serverSocket.getFreeSits(tableIds);
+        let occupiedSeatsMap = serverSocket.getFreeSits(tableIds);
+        
+        // S'assurer que occupiedSeatsMap est une Map valide
+        if (!occupiedSeatsMap || typeof occupiedSeatsMap.get !== 'function') {
+            occupiedSeatsMap = new Map();
+        }
         
         const dataWithActiveInfo = tables.map(t => {
             const tableData = t.toJSON();
@@ -18,12 +23,12 @@ exports.findAll = asyncHandler(async (req, res)=> {
             return tableData;
         });
 
-        for (let i = 1; i <= tables.length; i++) {
-          
-          if (occupiedSeatsMap.get(i) === undefined) {
-            occupiedSeatsMap.set(i, 9);
-          }
-        }
+        // Remplir les sièges par défaut si manquant
+        tables.forEach(t => {
+            if (occupiedSeatsMap.get(t.id) === undefined) {
+                occupiedSeatsMap.set(t.id, 9);
+            }
+        });
         
         const occupiedSeats = Object.fromEntries(occupiedSeatsMap);
         

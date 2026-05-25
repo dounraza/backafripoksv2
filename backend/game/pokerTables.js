@@ -646,6 +646,12 @@ class PokerTable {
             return;
         }
 
+        // Safety check to prevent AssertionError
+        if (this.table.isHandInProgress()) {
+            console.warn(`[TABLE ${this.tableInfo.id}] Cannot start hand: hand already in progress.`);
+            return;
+        }
+
         try {
             const latestTable = await Table.findByPk(this.tableInfo.id);
             if (latestTable) {
@@ -762,6 +768,14 @@ class PokerTable {
 
             if (seatIndex === null) return false;
             
+            // Synchronisation : vérifier si le siège est réellement libre côté moteur
+            const engineSeats = this.table.seats();
+            if (engineSeats[seatIndex] !== null) {
+                console.warn(`[TABLE ${this.tableInfo.id}] Seat ${seatIndex} conflict! Engine says occupied.`);
+                this.seatTaken.add(seatIndex); // Corriger notre set local
+                return false;
+            }
+
             const avatar = `${Math.floor(Math.random() * this.avatarsMaxNb)}.png`;
             const existingAvatar = this.avatars.find(avt => avt.userId === player.user.id); 
             if (existingAvatar) {
