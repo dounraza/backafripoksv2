@@ -39,7 +39,10 @@ exports.uploadAvatar = asyncHandler(async (req, res) => {
         }
     }
 
-    user.avatar_url = `/uploads/avatars/${req.file.filename}`;
+    const baseUrl = 'https://adminafripoks-production.up.railway.app';
+    // Le nom de fichier est celui retourné par l'API d'upload externe
+    const filename = req.file.filename; 
+    user.avatar_url = `${baseUrl}/avatars/${filename}`;
     await user.save();
 
     res.json({

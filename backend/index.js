@@ -46,7 +46,8 @@ const corsOptions = {
 const app = express();
 
 app.use(cors(corsOptions));
-app.use('/uploads/avatars', express.static(path.resolve(__dirname, '..', 'public', 'avatars')));
+// Utiliser le dossier public/avatars pour servir les images sous /avatars/
+app.use('/avatars', express.static(path.join(__dirname, 'backend', 'public', 'avatars')));
 
 
 app.use(express.json({ extended: false }));
