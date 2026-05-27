@@ -219,7 +219,8 @@ const serverSocket = (app) => {
                         idlePlayers = idlePlayers.filter(id => id !== Number(userId));
                         idlePlayersMap.set(Number(tableId), idlePlayers);
                         table.disconnectTimers.delete(Number(userId));
-                        setTimeout(() => { table.removePlayer(socket.id); }, 3000);
+                        const oldSocketId = player.socketio.id;
+                        setTimeout(() => { table.removePlayer(oldSocketId); }, 3000);
                         return;
                     }
 
@@ -264,6 +265,11 @@ const serverSocket = (app) => {
                 
                 const solde = await Soldes.findOne({ where: { userId } });
                 if (!solde) return socket.emit('joinError', { message: 'Informations introuvables' });
+                
+                if (playerCave < table.tableInfo.cave) {
+                    return socket.emit('joinError', { message: `La cave minimum pour cette table est de ${table.tableInfo.cave}` });
+                }
+                
                 if (solde.montant < playerCave) return socket.emit('joinError', { message: 'Solde insuffisant' });    
 
                 const joinedTables = playerTables.get(Number(userId));

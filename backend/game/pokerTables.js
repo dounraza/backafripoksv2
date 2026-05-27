@@ -92,30 +92,34 @@ class PokerTable {
         }
     }
 
-    handleDisconnect(userId, socketId) {
+    handleDisconnect(userId) {
         try {
             if (this.disconnectTimers.has(Number(userId))) return;
-            const player = this.players.get(socketId);
+            
+            // On cherche le joueur par son userId car socketId n'est plus fiable lors d'une déconnexion
+            const player = Array.from(this.players.values()).find(p => p.user.id === Number(userId));
+            if (!player) return;
+
             const timeoutId = setTimeout(async () => {
                 const idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
-                if (!idlePlayers.find(id => id !== player.user.id)) {
+                if (!idlePlayers.find(id => id === player.user.id)) {
                     idlePlayers.push(player.user.id);
                 }
                 idlePlayersMap.set(this.tableInfo.id, idlePlayers);
             }, 30 * 60 * 1000); // 30 minutes
-            this.disconnectTimers.set(userId, timeoutId);
+            this.disconnectTimers.set(Number(userId), timeoutId);
         } catch (err) {
             console.error('[DISCONNECT] Error handling disconnect for user:', userId, err);
         }
     }
 
     handleReconnect(userId) {
-        const timeoutId = this.disconnectTimers.get(userId);
+        const timeoutId = this.disconnectTimers.get(Number(userId));
         if (timeoutId) {
             clearTimeout(timeoutId);
-            this.disconnectTimers.delete(userId);
+            this.disconnectTimers.delete(Number(userId));
             let idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
-            idlePlayers = idlePlayers.filter(id => id !== userId);
+            idlePlayers = idlePlayers.filter(id => id !== Number(userId));
             idlePlayersMap.set(this.tableInfo.id, idlePlayers);
         }
     }
@@ -208,49 +212,62 @@ class PokerTable {
                 });
     
                 const playerNames = Array(this.maxSeats).fill(null);
-                for (const player of this.players.values()) {
-                    if (player.seatIndex !== undefined) {
-                        playerNames[player.seatIndex] = player.user.name;
-                        const solde = await Soldes.findOne({ where: { userId: player.user.id } });
-                        const cave = this.caves.get(player.user.id);
-                        const stack = updatedStacks[player.seatIndex];
-                        solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
-                        await solde.save();
-                        this.caves.set(player.user.id, stack);
-                    }
-                }
-                    
-                const data = pokerTable.prepareHistoriqueMain(communityCard, pokerTable.holeCards, pokerTable.foldedPlayers, detailedWinners, playerNames);
-                    
-                try {
-                    await HistoriqueMain.create({
-                        table_name: data.table_name,
-                        cartes_communaute: data.cartes_communaute,
-                        main_joueurs: data.main_joueurs,
-                        foldes: data.foldes,
-                        gagnants: data.gagnants
-                    });
-                } catch (error) {
-                    console.error("❌ Erreur lors de l’enregistrement de l’historique :", error);
-                }
-    
                 const result = {
                     allCards: !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? allCards : [],
                     winStates: winStates,
                     communityCards: communityCard
+                };
+
+                // Showdown immédiat !
+                pokerTable.broadcastWin(result);
+
+                const dbUpdates = [];
+                for (const player of this.players.values()) {
+                    if (player.seatIndex !== undefined) {
+                        playerNames[player.seatIndex] = player.user.name;
+                        const currentPlayer = player;
+                        const stack = updatedStacks[player.seatIndex];
+
+                        dbUpdates.push((async () => {
+                            try {
+                                const solde = await Soldes.findOne({ where: { userId: currentPlayer.user.id } });
+                                if (solde) {
+                                    const cave = this.caves.get(currentPlayer.user.id);
+                                    solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
+                                    await solde.save();
+                                    this.caves.set(currentPlayer.user.id, stack);
+                                }
+                            } catch (error) {
+                                console.error(`❌ Erreur lors de la mise à jour du solde pour l'utilisateur ${currentPlayer.user.id} :`, error);
+                            }
+                        })());
+                    }
                 }
-                    
-                setTimeout(() => {
-                    pokerTable.broadcastWin(result);
-                }, 1000);
-                
+
+                const histData = pokerTable.prepareHistoriqueMain(communityCard, pokerTable.holeCards, pokerTable.foldedPlayers, detailedWinners, playerNames);
+                dbUpdates.push((async () => {
+                    try {
+                        await HistoriqueMain.create({
+                            table_name: histData.table_name,
+                            cartes_communaute: histData.cartes_communaute,
+                            main_joueurs: histData.main_joueurs,
+                            foldes: histData.foldes,
+                            gagnants: histData.gagnants
+                        });
+                    } catch (error) {
+                        console.error("❌ Erreur lors de l’enregistrement de l’historique :", error);
+                    }
+                })());
+
                 // Privacy: Hide all cards after win broadcast
                 pokerTable.holeCards = Array(this.maxSeats).fill([]);
                 pokerTable.holeCardsToShow = Array(this.maxSeats).fill([]);
                 pokerTable.omahaCommunityCards = null;
-                
+
                 pokerTable.broadcastState();
-    
+
+                // On attend que toutes les mises à jour DB soient terminées en arrière-plan
+                await Promise.all(dbUpdates);    
                 pokerTable.foldedPlayers = new Set();
                 
                 for(const player of pokerTable.removedPlayers.values()) {
@@ -553,7 +570,7 @@ class PokerTable {
                             console.log(`[DEBUG] replacePlayer: User ${userId} at seat ${player.seatIndex} has stack ${stack}. Adding to waitingForRecave.`);
                             this.waitingForRecave.add(userId);
                             
-                            // Auto-kick after 15 seconds if no recave
+                            // Auto-kick after 45 seconds if no recave
                             if (!this.recaveTimers.has(userId)) {
                                 const timeoutId = setTimeout(async () => {
                                     console.log(`[AUTOKICK] Player ${userId} timed out for recave`);
@@ -621,7 +638,10 @@ class PokerTable {
     }
 
     async checkStartConditions() {
-        if (!this.table.isHandInProgress() && !this.isShowDownInProgress && this.seatTaken.size >= 2) {
+        const seated = this.table.seats().filter(s => s !== null);
+        console.log(`[DEBUG] checkStartConditions: Engine seats count = ${seated.length}`);
+        
+        if (!this.table.isHandInProgress() && !this.isShowDownInProgress && seated.length >= 2) {
             await this.startGame();
         }
         try {
@@ -747,6 +767,13 @@ class PokerTable {
     
     addPlayer(player, seatPlayer) {
         try {
+            // Vérifier si l'utilisateur est déjà assis à cette table
+            const alreadySeated = Array.from(this.players.values()).find(p => p.user.id === player.user.id);
+            if (alreadySeated) {
+                console.warn(`[TABLE ${this.tableInfo.id}] User ${player.user.id} already seated at seat ${alreadySeated.seatIndex}`);
+                return false;
+            }
+
             let seatIndex = null;
             if (seatPlayer !== null && seatPlayer !== undefined) {
                 if (seatPlayer >= 0 && seatPlayer < this.maxSeats && !this.seatTaken.has(seatPlayer)) {
@@ -803,12 +830,19 @@ class PokerTable {
             const player = this.players.get(socketId);
             if (!player) return false;
             
+            const seatIndex = player.seatIndex;
+
+            // Libérer le siège dans le moteur de poker AVANT de nettoyer l'état local
+            const engineSeats = this.table.seats();
+            if (seatIndex !== undefined && seatIndex !== null && engineSeats[seatIndex] !== null) {
+                this.table.standUp(seatIndex);
+            }
+
             // Cleanup cards when player leaves
             this.holeCards = Array(this.maxSeats).fill(null);
             this.holeCardsToShow = Array(this.maxSeats).fill(null);
             this.omahaCommunityCards = null;
 
-            const seatIndex = player.seatIndex;
             this.seatTaken.delete(seatIndex);
             this.players.delete(socketId);
             
@@ -818,18 +852,15 @@ class PokerTable {
                 this.recaveTimers.delete(player.user.id);
             }
 
-            let playerTables = playerTablesMap.get(player.user.id) ?? [];
-            playerTables = playerTables.filter(table => Number(table) !== Number(this.tableInfo.id));
-            playerTablesMap.set(player.user.id, playerTables);
+            let playerTablesList = playerTablesMap.get(player.user.id) ?? [];
+            playerTablesList = playerTablesList.filter(table => Number(table) !== Number(this.tableInfo.id));
+            playerTablesMap.set(player.user.id, playerTablesList);
            
-            if (this.seatTaken.has(seatIndex)) {
-                this.table.standUp(seatIndex);
-            }
             this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
             playerCavesMap.delete(player.user.id);
 
             // Broadcast after cleanup
-            this.broadcastState();
+            await this.checkStartConditions();
 
             return true;
         }catch (err) {
