@@ -63,3 +63,24 @@ exports.isUserInTable = asyncHandler(async (req, res) => {
       console.error('[USER IN TABLE] ERR', error);
     }
 })
+
+exports.getUserTables = asyncHandler(async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const tableIds = playerTablesMap.get(Number(userId)) || [];
+        
+        const tables = await Promise.all(tableIds.map(async (tid) => {
+            const tableInfo = await Table.findByPk(tid);
+            return {
+                id: tid,
+                name: tableInfo?.name || 'Table inconnue',
+                cave: tableInfo?.cave || 0
+            };
+        }));
+        
+        res.json({ success: true, data: tables });
+    } catch (error) {
+        console.error('[GET USER TABLES] ERR', error);
+        res.status(500).json({ success: false, message: 'Erreur serveur' });
+    }
+});
