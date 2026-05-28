@@ -856,8 +856,15 @@ class PokerTable {
             playerTablesList = playerTablesList.filter(table => Number(table) !== Number(this.tableInfo.id));
             playerTablesMap.set(player.user.id, playerTablesList);
            
+            let playerCavesList = playerCavesMap.get(player.user.id) || [];
+            playerCavesList = playerCavesList.filter(c => Number(c.tableId) !== Number(this.tableInfo.id));
+            if (playerCavesList.length > 0) {
+                playerCavesMap.set(player.user.id, playerCavesList);
+            } else {
+                playerCavesMap.delete(player.user.id);
+            }
+
             this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
-            playerCavesMap.delete(player.user.id);
 
             // Broadcast after cleanup
             await this.checkStartConditions();

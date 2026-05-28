@@ -266,24 +266,32 @@ const serverSocket = (app) => {
                 const solde = await Soldes.findOne({ where: { userId } });
                 if (!solde) return socket.emit('joinError', { message: 'Informations introuvables' });
                 
-                if (playerCave < table.tableInfo.cave) {
+                const joinedTables = playerTables.get(Number(userId)) || [];
+                const playerCaves = playerCavesMap.get(Number(userId)) || [];
+                
+                // Si le joueur est déjà sur cette table (rejoin), on bypass le check de cave minimum
+                const isAlreadyOnThisTable = joinedTables.includes(Number(tableId));
+                
+                if (!isAlreadyOnThisTable && playerCave < table.tableInfo.cave) {
                     return socket.emit('joinError', { message: `La cave minimum pour cette table est de ${table.tableInfo.cave}` });
                 }
                 
-                if (solde.montant < playerCave) return socket.emit('joinError', { message: 'Solde insuffisant' });    
-
-                const joinedTables = playerTables.get(Number(userId));
-                const playerCaves = playerCavesMap.get(Number(userId)) || [];
-
-                if (joinedTables !== undefined && joinedTables.length > 0) {
+                if (joinedTables.length > 0) {
                     let currentPlayerTotalCaves = 0;
-                    for (let tableId of joinedTables) {
-                        const cave = playerCaves.find(cave => parseInt(cave.tableId) === parseInt(tableId));
+                    for (let tid of joinedTables) {
+                        // On n'inclut pas la table actuelle dans le calcul du "déjà engagé" 
+                        // si on est en train de la rejoindre (reconnexion)
+                        if (Number(tid) === Number(tableId)) continue;
+                        
+                        const cave = playerCaves.find(c => parseInt(c.tableId) === parseInt(tid));
                         if (cave !== undefined) currentPlayerTotalCaves += cave.cave;
                     }
+                    
                     if (currentPlayerTotalCaves + Number(playerCave) > solde.montant) {
-                        return socket.emit('joinError', { message: 'Solde insuffisant' });
+                        return socket.emit('joinError', { message: 'Solde insuffisant (déjà engagé sur d\'autres tables)' });
                     }
+                } else if (solde.montant < playerCave) {
+                    return socket.emit('joinError', { message: 'Solde insuffisant' });    
                 }
 
                 const user = await User.findByPk(userId);
